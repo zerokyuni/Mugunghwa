@@ -13,7 +13,6 @@
             background-color: #4ade80;
         }
         #gameCanvas { display: block; width: 100%; height: 100%; }
-        /* 버튼 눌림 효과 강화 */
         .step-btn { transition: transform 0.05s, background-color 0.1s; }
         .step-btn:active, .step-btn.active { transform: scale(0.92); background-color: #f59e0b; box-shadow: none !important; margin-top: 4px; }
     </style>
@@ -78,8 +77,6 @@
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
-        
-        // 특수문자 제거하여 안전한 앱 ID 생성
         const safeAppId = firebaseConfig.appId.replace(/[^a-zA-Z0-9]/g, '_'); 
 
         const UI = {
@@ -91,6 +88,9 @@
 
         let myUid = null;
         let isHost = false;
+        let forcedHostUid = null; 
+        let oldestUid = null;     
+
         let gameState = 'CONNECTING'; 
         let currentStage = 1;
         let targetMeters = 20;
@@ -106,7 +106,6 @@
         let remotePlayers = {};
         let bots = [];
         
-        // 15종의 극악무도 패턴
         const BASE_PATTERNS = [
             [{t:'무',d:250},{t:'궁',d:250},{t:'화',d:250},{t:' ',d:0},{t:'꽃',d:200},{t:'이',d:200},{t:' ',d:0},{t:'피',d:150},{t:'었',d:150},{t:'습',d:150},{t:'니',d:100},{t:'다',d:100},{t:'!',d:300}], 
             [{t:'무~',d:600},{t:'궁~',d:600},{t:'화~',d:600},{t:' ',d:0},{t:'꽃',d:120},{t:'이',d:120},{t:'폈',d:120},{t:'다',d:120},{t:'!',d:200}], 
@@ -141,17 +140,8 @@
         });
         window.dispatchEvent(new Event('resize'));
 
-        // ==========================================
-        // [중요] Firestore 경로 규칙
-        // ==========================================
-        function getPlayersRef() {
-            // Collection: 5 segments (홀수) -> OK!
-            return collection(db, `artifacts/${safeAppId}/public/data/squid_players`);
-        }
-        function getStateRef() {
-            // Document: 6 segments (짝수) -> OK!
-            return doc(db, `artifacts/${safeAppId}/public/data/squid_state`, 'globalState');
-        }
+        function getPlayersRef() { return collection(db, `artifacts/${safeAppId}/public/data/squid_players`); }
+        function getStateRef() { return doc(db, `artifacts/${safeAppId}/public/data/squid_state`, 'globalState'); }
 
         UI.desc.innerText = "1단계: Firebase 인증 진행 중...";
         signInAnonymously(auth).catch((error) => {
@@ -169,6 +159,26 @@
             }
         });
 
+        function resolveHost() {
+            if (!myUid) return;
+            let currentHost = forcedHostUid;
+            let hostIsOnline = false;
+
+            if (currentHost === myUid) hostIsOnline = true;
+            else if (currentHost && remotePlayers[currentHost]) hostIsOnline = true;
+
+            if (!currentHost || !hostIsOnline) {
+                currentHost = oldestUid || myUid;
+            }
+
+            if (currentHost === myUid && !isHost) {
+                isHost = true; UI.hostBadge.classList.remove('hidden');
+                if (bots.length === 0) initBots();
+            } else if (currentHost !== myUid && isHost) {
+                isHost = false; UI.hostBadge.classList.add('hidden');
+            }
+        }
+
         function setupMultiplayer() {
             const playersRef = getPlayersRef();
             const stateRef = getStateRef();
@@ -182,8 +192,17 @@
                     targetMeters = currentStage * 20;
                     WORLD_START_Y = targetMeters * 20;
                     UI.stageText.innerText = currentStage;
+                    
+                    if (data.forceHost) forcedHostUid = data.forceHost;
+                    resolveHost();
 
-                    if (data.status === 'RESET' && gameState === 'PLAYING') triggerGlobalReset(data.resetReason);
+                    if (data.status === 'CLEARED_PENDING' && gameState !== 'ENDED') {
+                        triggerGlobalReset('CLEARED');
+                    } else if (data.status === 'HUMANS_DEAD' && gameState !== 'ENDED') {
+                        triggerGlobalReset('ALL_DEAD_MANUAL');
+                    } else if (data.status === 'RESET' && gameState !== 'PLAYING') {
+                        startGame(); 
+                    }
                 }
             }, (error) => {
                 UI.title.innerHTML = "<span class='text-red-500'>DB 에러</span>";
@@ -192,7 +211,7 @@
 
             onSnapshot(playersRef, (snapshot) => {
                 const now = Date.now();
-                let oldestUid = myUid;
+                oldestUid = myUid;
                 let oldestTime = now + 999999;
                 let activeCount = 0;
 
@@ -210,13 +229,7 @@
                 });
 
                 UI.playerCount.innerText = activeCount + 1;
-                
-                if (oldestUid === myUid && !isHost) {
-                    isHost = true; UI.hostBadge.classList.remove('hidden');
-                    if (bots.length === 0) initBots();
-                } else if (oldestUid !== myUid && isHost) {
-                    isHost = false; UI.hostBadge.classList.add('hidden');
-                }
+                resolveHost(); 
 
                 if (gameState === 'CONNECTING') {
                     UI.title.innerText = "준비 완료!";
@@ -231,13 +244,14 @@
             requestAnimationFrame(gameLoop);
         }
 
+        // --- 누락되었던 봇 stepInterval 속성 복구! ---
         function initBots() {
             const speedMod = Math.max(0, (currentStage - 1) * 16);
             const reactMod = Math.max(0, (currentStage - 1) * 12);
             bots = [
-                { id: 'bot1', y: WORLD_START_Y, stepSize: 12, lastFoot: 'left', color: '#ef4444', isAlive: true, hasFinished: false, name: '[BOT] 다혈질', caution: 0.80, nextStepTime: 0, reactionTime: Math.max(35, 120 - reactMod) },
-                { id: 'bot2', y: WORLD_START_Y, stepSize: 11, lastFoot: 'left', color: '#a855f7', isAlive: true, hasFinished: false, name: '[BOT] 무난이', caution: 0.92, nextStepTime: 0, reactionTime: Math.max(25, 80 - reactMod) },
-                { id: 'bot3', y: WORLD_START_Y, stepSize: 10, lastFoot: 'left', color: '#f97316', isAlive: true, hasFinished: false, name: '[BOT] 신중이', caution: 0.99, nextStepTime: 0, reactionTime: Math.max(15, 50 - reactMod) }
+                { id: 'bot1', y: WORLD_START_Y, stepSize: 12, stepInterval: Math.max(45, 100 - speedMod), lastFoot: 'left', color: '#ef4444', isAlive: true, hasFinished: false, name: '[BOT] 다혈질', caution: 0.80, nextStepTime: 0, reactionTime: Math.max(35, 120 - reactMod) },
+                { id: 'bot2', y: WORLD_START_Y, stepSize: 11, stepInterval: Math.max(65, 130 - speedMod), lastFoot: 'left', color: '#a855f7', isAlive: true, hasFinished: false, name: '[BOT] 무난이', caution: 0.92, nextStepTime: 0, reactionTime: Math.max(25, 80 - reactMod) },
+                { id: 'bot3', y: WORLD_START_Y, stepSize: 10, stepInterval: Math.max(85, 160 - speedMod), lastFoot: 'left', color: '#f97316', isAlive: true, hasFinished: false, name: '[BOT] 신중이', caution: 0.99, nextStepTime: 0, reactionTime: Math.max(15, 50 - reactMod) }
             ];
             bots.forEach(b => { b.displayY = b.y; });
         }
@@ -256,22 +270,30 @@
             setDoc(getStateRef(), {
                 stage: currentStage, status: gameState,
                 tagger: { isLookingFront: tagger.isLookingFront, speechBubble: tagger.speechBubble },
-                bots: bots.map(b => ({ id: b.id, y: b.y, lastFoot: b.lastFoot, isAlive: b.isAlive, hasFinished: b.hasFinished, color: b.color, name: b.name }))
+                bots: bots.map(b => ({ id: b.id, y: b.y, stepSize: b.stepSize, stepInterval: b.stepInterval, lastFoot: b.lastFoot, isAlive: b.isAlive, hasFinished: b.hasFinished, color: b.color, name: b.name, caution: b.caution, reactionTime: b.reactionTime, nextStepTime: b.nextStepTime, lastMoveTime: b.lastMoveTime }))
             }, { merge: true }).catch(() => {});
         }
 
         function checkRoundProgression() {
-            let activeRunners = 0; let clearCount = 0;
-            const check = (p) => { if (p.isAlive && !p.hasFinished) activeRunners++; if (p.hasFinished) clearCount++; };
-            bots.forEach(check); Object.values(remotePlayers).concat([myPlayer]).forEach(check);
+            let humanRunners = 0; let humanClear = 0;
+            const humans = Object.values(remotePlayers).concat([myPlayer]);
 
-            if (activeRunners === 0 && gameState === 'PLAYING') {
+            humans.forEach(p => {
+                if (p.isAlive && !p.hasFinished) humanRunners++;
+                if (p.hasFinished) humanClear++;
+            });
+
+            if (humanRunners === 0 && gameState === 'PLAYING') {
                 gameState = 'RESET_PENDING';
-                let nextStage = clearCount > 0 ? currentStage + 1 : 1;
-                setTimeout(() => {
-                    currentStage = nextStage;
-                    setDoc(getStateRef(), { status: 'RESET', stage: currentStage, resetReason: clearCount > 0 ? 'CLEARED' : 'ALL_DEAD' }, { merge: true });
-                }, 3000);
+                if (humanClear > 0) {
+                    setDoc(getStateRef(), { status: 'CLEARED_PENDING', stage: currentStage }, { merge: true });
+                    setTimeout(() => {
+                        currentStage++;
+                        setDoc(getStateRef(), { status: 'RESET', stage: currentStage }, { merge: true });
+                    }, 3000);
+                } else {
+                    setDoc(getStateRef(), { status: 'HUMANS_DEAD', stage: 1 }, { merge: true });
+                }
             }
         }
 
@@ -279,16 +301,25 @@
             gameState = 'ENDED'; UI.overlay.style.display = 'flex';
             if (reason === 'CLEARED') {
                 UI.title.innerHTML = "라운드 종료!"; UI.title.className = "text-5xl font-black text-yellow-400 mb-2 text-center";
-                UI.desc.innerHTML = `생존자 모두 다음 라운드로 진출합니다.<br><span class="text-xs">잠시 후 재시작됩니다...</span>`;
-            } else {
-                UI.title.innerHTML = "전멸!"; UI.title.className = "text-6xl font-black text-red-500 mb-2 text-center";
-                UI.desc.innerHTML = `모든 참가자가 탈락했습니다.<br>STAGE 1로 강등됩니다.<br><span class="text-xs">잠시 후 재시작됩니다...</span>`;
+                UI.desc.innerHTML = `생존자 모두 다음 라운드로 진출합니다.<br><span class="text-xs">잠시 후 자동 재시작됩니다...</span>`;
+                UI.btnStart.classList.add('hidden');
+            } else if (reason === 'ALL_DEAD_MANUAL') {
+                UI.title.innerHTML = "인간 전멸!"; UI.title.className = "text-6xl font-black text-red-500 mb-2 text-center";
+                UI.desc.innerHTML = `모든 인간 플레이어가 탈락했습니다.<br>제일 먼저 <b>[다시 시작]</b>을 누르는 사람이<br>다음 게임의 👑<b>방장</b>이 됩니다!`;
+                UI.btnStart.innerText = "내가 방장! 다시 시작";
+                UI.btnStart.classList.remove('hidden');
+                UI.btnStart.onclick = claimHostAndRestart; 
             }
-            UI.btnStart.classList.add('hidden');
-            setTimeout(() => { UI.btnStart.innerText = "계속 달리기"; UI.btnStart.classList.remove('hidden'); }, 3000);
         }
 
-        UI.btnStart.onclick = startGame;
+        function claimHostAndRestart() {
+            UI.btnStart.classList.add('hidden');
+            UI.desc.innerHTML = "방장 권한을 획득하고 게임을 초기화합니다...";
+            setDoc(getStateRef(), { status: 'RESET', stage: 1, forceHost: myUid }, { merge: true });
+        }
+
+        UI.btnStart.onclick = claimHostAndRestart; 
+
         function startGame() {
             gameState = 'PLAYING'; UI.overlay.style.display = 'none';
             targetMeters = currentStage * 20; WORLD_START_Y = targetMeters * 20;
@@ -325,10 +356,8 @@
             syncLocalPlayer();
         }
 
-        // PC 방향키 조작 이벤트
         const btnLeft = document.getElementById('btnLeft');
         const btnRight = document.getElementById('btnRight');
-
         const addInput = (el, foot) => {
             const handler = (e) => { e.preventDefault(); movePlayer(foot); el.classList.add('active'); setTimeout(()=>el.classList.remove('active'),100); };
             el.addEventListener('touchstart', handler, {passive: false}); el.addEventListener('mousedown', handler);
@@ -387,6 +416,7 @@
                             if (shouldStop) { bot.nextStepTime = now + 100; } 
                             else {
                                 bot.y -= bot.stepSize; bot.lastFoot = bot.lastFoot === 'left' ? 'right' : 'left';
+                                // 이제 stepInterval이 정상적으로 더해집니다.
                                 bot.nextStepTime = now + bot.stepInterval + (Math.random() * 40 - 20); bot.lastMoveTime = now;
                                 if (bot.y <= WORLD_FINISH_Y) bot.hasFinished = true;
                             }
