@@ -1,10 +1,9 @@
-
 <!DOCTYPE html>
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>모바일 퍼니스피드: 무궁화 (최종)</title>
+    <title>무궁화 꽃이 피었습니다!</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body {
@@ -58,7 +57,7 @@
         <h1 id="uiTitle" class="text-5xl md:text-7xl font-black text-white mb-2 text-center drop-shadow-lg">무궁화 꽃이<br>피었습니다</h1>
         <p id="uiDesc" class="text-white text-lg md:text-xl mb-8 text-center px-6 leading-relaxed">
             <span class="text-yellow-300">왼발, 오른발을 번갈아 터치</span>하여 전진하세요.<br>
-            스테이지가 오를수록 거리가 멀어지고<br>술래의 패턴이 다양해집니다!
+            스테이지가 오를수록 거리가 멀어지고<br>술래의 패턴이 <b>극악무도하게</b> 다양해집니다!
         </p>
         <button id="btnStart" class="bg-green-500 hover:bg-green-400 text-white px-10 py-5 rounded-full text-2xl md:text-3xl font-bold shadow-[0_6px_0_#166534] active:translate-y-2 active:shadow-none transition-all animate-pulse">
             게임 시작
@@ -99,26 +98,43 @@
         let bots = [];
         
         function initBots() {
-            const speedMod = Math.max(0, (currentStage - 1) * 10);
-            const reactMod = Math.max(0, (currentStage - 1) * 8);
+            // 스테이지에 따른 봇들의 스펙업 수치를 더 가파르게 상향
+            const speedMod = Math.max(0, (currentStage - 1) * 15);
+            const reactMod = Math.max(0, (currentStage - 1) * 10);
 
-            // 봇들의 caution 수치를 상향 조정하여 더 잘 멈추도록 개선
+            // 보폭(stepSize), 이동 간격(stepInterval), 반응속도(reactionTime), 눈치(caution) 대폭 상향
             bots = [
-                { id: 'bot1', x: 0, y: WORLD_START_Y, radius: 18, stepSize: 10, lastFoot: 'left', color: '#ef4444', isAlive: true, hasFinished: false, rank: 0, 
-                  reactionTime: Math.max(50, 160 - reactMod), stepInterval: Math.max(70, 150 - speedMod), nextStepTime: 0, lastMoveTime: 0, caution: 0.80, name: '다혈질' }, // caution 0.25 -> 0.60
-                { id: 'bot2', x: 0, y: WORLD_START_Y, radius: 18, stepSize: 10, lastFoot: 'left', color: '#a855f7', isAlive: true, hasFinished: false, rank: 0, 
-                  reactionTime: Math.max(40, 110 - reactMod), stepInterval: Math.max(90, 180 - speedMod), nextStepTime: 0, lastMoveTime: 0, caution: 0.85, name: '무난이' }, // caution 0.65 -> 0.85
+                { id: 'bot1', x: 0, y: WORLD_START_Y, radius: 18, stepSize: 12, lastFoot: 'left', color: '#ef4444', isAlive: true, hasFinished: false, rank: 0, 
+                  reactionTime: Math.max(40, 130 - reactMod), stepInterval: Math.max(50, 110 - speedMod), nextStepTime: 0, lastMoveTime: 0, caution: 0.75, name: '다혈질' }, 
+                { id: 'bot2', x: 0, y: WORLD_START_Y, radius: 18, stepSize: 11, lastFoot: 'left', color: '#a855f7', isAlive: true, hasFinished: false, rank: 0, 
+                  reactionTime: Math.max(30, 90 - reactMod), stepInterval: Math.max(70, 140 - speedMod), nextStepTime: 0, lastMoveTime: 0, caution: 0.90, name: '무난이' }, 
                 { id: 'bot3', x: 0, y: WORLD_START_Y, radius: 18, stepSize: 10, lastFoot: 'left', color: '#f97316', isAlive: true, hasFinished: false, rank: 0, 
-                  reactionTime: Math.max(30, 70 - reactMod), stepInterval: Math.max(120, 220 - speedMod), nextStepTime: 0, lastMoveTime: 0, caution: 0.98, name: '신중이' }  // caution 0.95 -> 0.98
+                  reactionTime: Math.max(20, 60 - reactMod), stepInterval: Math.max(90, 170 - speedMod), nextStepTime: 0, lastMoveTime: 0, caution: 0.99, name: '신중이' }  
             ];
         }
 
+        // 패턴 대폭 추가! (초스피드, 페이크, 밀당 등)
         const BASE_PATTERNS = [
+            // 0. 기본 (정상 속도)
             [{t:'무',d:250},{t:'궁',d:250},{t:'화',d:250},{t:' ',d:0},{t:'꽃',d:200},{t:'이',d:200},{t:' ',d:0},{t:'피',d:150},{t:'었',d:150},{t:'습',d:150},{t:'니',d:100},{t:'다',d:100},{t:'!',d:300}],
+            // 1. 느릿느릿 끝에 약간 빨리 (급발진 약)
+            [{t:'무~',d:600},{t:'궁~',d:600},{t:'화~',d:600},{t:' ',d:0},{t:'꽃',d:120},{t:'이',d:120},{t:'폈',d:120},{t:'다',d:120},{t:'!',d:200}],
+            // 2. 엇박자 낚시 
             [{t:'무',d:200},{t:'궁',d:200},{t:'화',d:200},{t:' ',d:0},{t:'꽃~',d:1000},{t:'~이',d:300},{t:' ',d:0},{t:'피',d:150},{t:'었',d:150},{t:'습',d:100},{t:'니',d:100},{t:'닷',d:100},{t:'!',d:200}],
-            [{t:'무~',d:600},{t:'궁~',d:600},{t:'화~',d:600},{t:' ',d:0},{t:'꽃',d:80},{t:'이',d:80},{t:'폈',d:80},{t:'다',d:80},{t:'!',d:200}],
-            [{t:'무',d:90},{t:'궁',d:90},{t:'화',d:90},{t:'꽃',d:90},{t:'이',d:90},{t:'피',d:90},{t:'었',d:90},{t:'습',d:90},{t:'니',d:90},{t:'닷',d:90},{t:'!',d:250}],
-            [{t:'무',d:200},{t:'궁',d:200},{t:'화',d:200},{t:' ',d:0},{t:'꽃',d:200},{t:'이',d:200},{t:' ',d:0},{t:'피',d:150},{t:'었',d:150},{t:'습',d:150},{t:'니~',d:500},{t:'다~',d:500},{t:'!',d:200}]
+            // 3. 아웃사이더 랩 
+            [{t:'무',d:80},{t:'궁',d:80},{t:'화',d:80},{t:'꽃',d:80},{t:'이',d:80},{t:'피',d:80},{t:'었',d:80},{t:'습',d:80},{t:'니',d:80},{t:'닷',d:80},{t:'!',d:250}],
+            // 4. 끝음 올리기 
+            [{t:'무',d:200},{t:'궁',d:200},{t:'화',d:200},{t:' ',d:0},{t:'꽃',d:200},{t:'이',d:200},{t:' ',d:0},{t:'피',d:150},{t:'었',d:150},{t:'습',d:150},{t:'니~',d:600},{t:'다~',d:600},{t:'!',d:200}],
+            
+            // --- [새로 추가된 하드코어 패턴] ---
+            // 5. 초광속 (Ultra Fast) - 대사 나오자마자 끝남
+            [{t:'무',d:40},{t:'궁',d:40},{t:'화',d:40},{t:'꽃',d:40},{t:'이',d:40},{t:'피',d:40},{t:'었',d:40},{t:'습',d:40},{t:'니',d:40},{t:'다',d:40},{t:'!',d:100}],
+            // 6. 페이크 정지 (Fake Stop) - 무궁화 부르고 한참 뒤에 기습
+            [{t:'무',d:150},{t:'궁',d:150},{t:'화',d:150},{t:'...',d:1000},{t:'꽃',d:50},{t:'이',d:50},{t:'피',d:50},{t:'었',d:50},{t:'습',d:50},{t:'니',d:50},{t:'다',d:50},{t:'!',d:150}],
+            // 7. 널뛰기 박자 (Push & Pull) - 느렸다 빨랐다 반복
+            [{t:'무',d:300},{t:'궁',d:50},{t:'화',d:300},{t:'꽃',d:50},{t:'이',d:300},{t:'피',d:50},{t:'었',d:300},{t:'습',d:50},{t:'니',d:300},{t:'다',d:50},{t:'!',d:200}],
+            // 8. 기습 단어형 - 거의 띄어쓰기 없이 뭉탱이로 쏘기
+            [{t:'무궁화 ',d:150},{t:'꽃이 ',d:150},{t:'피었',d:100},{t:'습니다!',d:100}]
         ];
 
         let activePatterns = [];
@@ -154,8 +170,9 @@
             targetMeters = currentStage * 20;
             WORLD_START_Y = targetMeters * 20;
             
-            let maxPatternIndex = Math.min(BASE_PATTERNS.length, currentStage + 1);
-            let speedMultiplier = Math.max(0.4, 1.0 - (currentStage - 1) * 0.1);
+            // 스테이지마다 사용할 수 있는 패턴 개수 증가 (스테이지 4부터는 모든 패턴 개방)
+            let maxPatternIndex = Math.min(BASE_PATTERNS.length, 2 + currentStage * 2);
+            let speedMultiplier = Math.max(0.4, 1.0 - (currentStage - 1) * 0.08); // 속도 증가폭 약간 조절(너무 빠르면 못깸)
 
             activePatterns = BASE_PATTERNS.slice(0, maxPatternIndex).map(pattern => 
                 pattern.map(p => ({ t: p.t, d: p.d * speedMultiplier }))
@@ -177,7 +194,7 @@
 
             tagger.isLookingFront = false;
             tagger.state = 'SPEAKING';
-            tagger.currentPattern = activePatterns[0];
+            tagger.currentPattern = activePatterns[0]; // 첫 시작은 기본패턴
             tagger.phraseIndex = 0;
             tagger.speechBubble = "";
             tagger.history = [];
@@ -218,7 +235,7 @@
                 
                 currentStage++;
                 let nextDist = currentStage * 20;
-                uiDesc.innerHTML = `무사히 결승선을 통과했습니다!<br><br>다음 목표: <span class="text-blue-300 font-bold">STAGE ${currentStage} (${nextDist}m)</span><br>술래의 패턴이 더 빨라지고 다양해집니다!`;
+                uiDesc.innerHTML = `무사히 결승선을 통과했습니다!<br><br>다음 목표: <span class="text-blue-300 font-bold">STAGE ${currentStage} (${nextDist}m)</span><br>술래의 패턴이 <b>더욱 악랄해집니다!</b>`;
                 btnStart.innerText = "다음 스테이지 도전";
                 btnStart.onclick = () => startGame(false);
             }
@@ -287,14 +304,16 @@
                     if (tagger.phraseIndex >= tagger.currentPattern.length) {
                         tagger.state = 'LOOKING';
                         tagger.isLookingFront = true;
-                        let minLook = Math.max(300, 800 - currentStage * 50);
-                        tagger.nextActionTime = timestamp + minLook + Math.random() * 800; 
+                        let minLook = Math.max(200, 700 - currentStage * 50); // 스테이지 높을수록 짧게 쳐다봄
+                        tagger.nextActionTime = timestamp + minLook + Math.random() * 600; 
                     } else {
                         tagger.nextActionTime = timestamp + currentDelay;
                     }
                 } else if (tagger.state === 'LOOKING') {
                     tagger.state = 'SPEAKING';
                     tagger.isLookingFront = false;
+                    
+                    // 무작위 패턴 뽑기 (연속으로 너무 쉬운게 나오지 않도록 완전 랜덤)
                     tagger.currentPattern = activePatterns[Math.floor(Math.random() * activePatterns.length)];
                     tagger.phraseIndex = 0;
                     tagger.speechBubble = "";
@@ -315,8 +334,8 @@
                         let shouldStop = false;
                         let progress = tagger.phraseIndex / tagger.currentPattern.length;
                         
-                        // 봇들의 눈치보기 조건: 진행률 55%부터 눈치보기 시작 (이전 65%에서 더 앞당김)
-                        if (tagger.state === 'SPEAKING' && progress > 0.55) {
+                        // 대사가 45%만 진행되어도 미리 눈치를 보기 시작함 (기존 55%보다 더 생존율 높아짐)
+                        if (tagger.state === 'SPEAKING' && progress > 0.45) {
                             if (Math.random() < bot.caution) shouldStop = true;
                         }
 
@@ -336,7 +355,8 @@
                     }
                 }
 
-                if (tagger.isLookingFront && (timestamp - bot.lastMoveTime < 100)) {
+                // 사망 판정 (아주 미세하게 더 관대하게 줌 - 봇들이 억울하게 죽는 현상 방지)
+                if (tagger.isLookingFront && (timestamp - bot.lastMoveTime < 80)) {
                     bot.isAlive = false;
                 }
             });
@@ -361,10 +381,10 @@
             } else {
                 ctx.fillStyle = '#1f2937'; ctx.fill(); // 머리 뒤통수
                 
-                // 심플한 뒤통수 디자인 (단발 느낌의 덩어리로 표현)
+                // 심플한 뒤통수 디자인
                 ctx.fillStyle = '#111827';
                 ctx.beginPath();
-                ctx.arc(0, 5, t.radius + 2, 0, Math.PI); // 머리카락 하단
+                ctx.arc(0, 5, t.radius + 2, 0, Math.PI);
                 ctx.fill();
             }
         }
@@ -467,13 +487,11 @@
                 ctx.fillText('술래 CAM', pipX + pipSize/2, pipY - 5);
             }
 
-            // B. 술래 대사 / 경고 텍스트 (반응형 폰트 사이즈)
+            // B. 술래 대사 / 경고 텍스트
             if (!tagger.isLookingFront && tagger.speechBubble) {
                 ctx.save();
                 ctx.fillStyle = 'white'; ctx.strokeStyle = '#ec4899'; ctx.lineWidth = 4;
                 
-                // 화면 너비에 따라 글자 크기를 조절하여 넘어가지 않게 방지
-                // 최대 40px, 화면이 작으면 줄어들도록 설정
                 let maxFontSize = 40;
                 let fontSize = Math.min(maxFontSize, (canvas.width * 0.8) / (tagger.speechBubble.length || 1));
                 ctx.font = `900 ${fontSize}px sans-serif`;
