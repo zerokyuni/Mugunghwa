@@ -61,7 +61,6 @@
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getDatabase, ref, set, onValue, update, onDisconnect, remove } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-database.js";
 
-
         const firebaseConfig = {
             apiKey: "AIzaSyDQ6QT1gRdh0yTm8_yT6j__Bb-VDHwx4xE",
             authDomain: "mugunghwa-game-938ed.firebaseapp.com",
@@ -103,7 +102,7 @@
 
         let lastMoveTime = Date.now();
         let myPlayer = { 
-            x: 0, y: WORLD_START_Y, radius: 18, stepSize: 10, lastFoot: null, 
+            id: '', x: 0, y: WORLD_START_Y, radius: 18, stepSize: 10, lastFoot: null, 
             color: '#3b82f6', isAlive: true, hasFinished: false, name: '나', deathReason: '',
             totalMeters: 0, currentMeters: 0, displayScore: 0, joinedAt: myJoinedAt
         };
@@ -165,6 +164,7 @@
         onAuthStateChanged(auth, (user) => {
             if (user) {
                 myUid = user.uid;
+                myPlayer.id = myUid; // ❗ 내 유저의 고유 아이디 명시적 주입
                 myPlayer.name = '유저 ' + myUid.substring(0, 4);
                 myPlayer.color = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'][Math.floor(Math.random()*5)];
                 UI.desc.innerText = "2단계: 데이터베이스 접속 중...";
@@ -280,7 +280,7 @@
                 resolveHost(); 
 
                 if (gameState === 'CONNECTING') {
-                    clearTimeout(connectionTimeout); // 정상 연결 성공 시 타이머 취소
+                    clearTimeout(connectionTimeout); 
                     UI.title.innerText = "준비 완료!";
                     UI.desc.innerHTML = `서버 연결 성공!<br>현재 스테이지: ${currentStage}`;
                     UI.btnStart.classList.remove('hidden');
@@ -364,6 +364,8 @@
                 UI.desc.innerHTML = `모든 플레이어가 탈락했습니다.<br><b>[다시 시작]</b>을 눌러 재도전하세요!`;
                 UI.btnStart.innerText = "다시 시작";
                 UI.btnStart.classList.remove('hidden');
+                
+                // ❗ 난입 로직 방지용 
                 UI.btnStart.onclick = claimHostAndRestart; 
             }
         }
@@ -374,7 +376,14 @@
             update(getStateRef(), { status: 'RESET', stage: 1, forceHost: myUid });
         }
 
-        UI.btnStart.onclick = claimHostAndRestart; 
+        // ❗ 버그 수정: 게임 첫 연결 시 '진행 중인 방'을 강제 리셋하지 않고 조용히 참여만 하도록 개선
+        UI.btnStart.onclick = () => {
+            if (gameState === 'CONNECTING') {
+                startGame();
+            } else {
+                claimHostAndRestart();
+            }
+        };
 
         function startGame() {
             gameState = 'PLAYING'; UI.overlay.style.display = 'none';
@@ -477,6 +486,14 @@
             }
 
             if (isHost) {
+                // ❗ 버그 수정: 게임 첫 시작/인계 시 패턴 배열이 비어있어 루프가 충돌하던 안전장치 추가
+                if (!tagger.currentPattern || tagger.currentPattern.length === 0) {
+                    tagger.nextActionTime = Date.now() + 1000; tagger.state = 'SPEAKING';
+                    let speedMultiplier = Math.max(0.4, 1.0 - (currentStage - 1) * 0.08);
+                    tagger.currentPattern = BASE_PATTERNS[0].map(p => ({ t: p.t, d: p.d * speedMultiplier }));
+                    tagger.phraseIndex = 0;
+                }
+
                 Object.keys(remotePlayers).forEach(uid => {
                     const rp = remotePlayers[uid];
                     if (gameState === 'PLAYING' && rp.isAlive && !rp.hasFinished) {
@@ -489,15 +506,20 @@
                 if (gameState === 'PLAYING') {
                     if (now > tagger.nextActionTime) {
                         if (tagger.state === 'SPEAKING') {
-                            tagger.speechBubble = tagger.currentPattern.slice(0, tagger.phraseIndex + 1).map(p => p.t).join('');
-                            let currentDelay = tagger.currentPattern[tagger.phraseIndex].d;
-                            tagger.phraseIndex++;
+                            if (tagger.phraseIndex < tagger.currentPattern.length) {
+                                tagger.speechBubble = tagger.currentPattern.slice(0, tagger.phraseIndex + 1).map(p => p.t).join('');
+                                let currentDelay = tagger.currentPattern[tagger.phraseIndex].d;
+                                tagger.phraseIndex++;
 
-                            if (tagger.phraseIndex >= tagger.currentPattern.length) {
+                                if (tagger.phraseIndex >= tagger.currentPattern.length) {
+                                    tagger.state = 'LOOKING'; tagger.isLookingFront = true;
+                                    let minLook = Math.max(200, 700 - currentStage * 50);
+                                    tagger.nextActionTime = now + minLook + Math.random() * 600;
+                                } else { tagger.nextActionTime = now + currentDelay; }
+                            } else {
                                 tagger.state = 'LOOKING'; tagger.isLookingFront = true;
-                                let minLook = Math.max(200, 700 - currentStage * 50);
-                                tagger.nextActionTime = now + minLook + Math.random() * 600;
-                            } else { tagger.nextActionTime = now + currentDelay; }
+                                tagger.nextActionTime = now + 100;
+                            }
                         } else if (tagger.state === 'LOOKING') {
                             tagger.state = 'SPEAKING'; tagger.isLookingFront = false;
                             tagger.phraseIndex = 0; tagger.speechBubble = "";
@@ -586,7 +608,8 @@
                 currentY -= 20;
             }
 
-            if (char.id === myPlayer.id || char.name === myPlayer.name) { 
+            // ❗ 버그 수정: 철저하게 나와 메모리가 일치하는 캐릭터 위에만 나👇 표시
+            if (char === myPlayer) { 
                 ctx.fillStyle = '#fcd34d'; 
                 ctx.font = 'bold 14px sans-serif';
                 ctx.fillText('나👇', 0, currentY);
