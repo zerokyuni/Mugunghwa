@@ -350,9 +350,16 @@
             gameState = 'PLAYING'; UI.overlay.style.display = 'none';
             roundStartTime = Date.now(); 
             
-            myPlayer.totalMeters += (myPlayer.currentMeters || 0);
-            myPlayer.currentMeters = 0;
-            myPlayer.displayScore = myPlayer.totalMeters;
+            // ❗ 1라운드 시작 시 점수 완벽 초기화, 그 외에는 누적
+            if (currentStage === 1) {
+                myPlayer.totalMeters = 0;
+                myPlayer.currentMeters = 0;
+                myPlayer.displayScore = 0;
+            } else {
+                myPlayer.totalMeters += (myPlayer.currentMeters || 0);
+                myPlayer.currentMeters = 0;
+                myPlayer.displayScore = myPlayer.totalMeters;
+            }
 
             targetMeters = currentStage * 20; WORLD_START_Y = targetMeters * 20;
             myPlayer.y = WORLD_START_Y; myPlayer.isAlive = true; myPlayer.hasFinished = false; myPlayer.deathReason = '';
@@ -363,9 +370,16 @@
             if (isHost) {
                 if (bots.length === 0) initBots();
                 bots.forEach(b => {
-                    b.totalMeters = (b.totalMeters || 0) + (b.currentMeters || 0);
-                    b.currentMeters = 0;
-                    b.displayScore = b.totalMeters;
+                    // ❗ 봇들도 1라운드 시작 시 점수 초기화
+                    if (currentStage === 1) {
+                        b.totalMeters = 0;
+                        b.currentMeters = 0;
+                        b.displayScore = 0;
+                    } else {
+                        b.totalMeters = (b.totalMeters || 0) + (b.currentMeters || 0);
+                        b.currentMeters = 0;
+                        b.displayScore = b.totalMeters;
+                    }
                     b.y = WORLD_START_Y; b.displayY = WORLD_START_Y;
                     b.isAlive = true; b.hasFinished = false;
                     const speedMod = Math.max(0, (currentStage - 1) * 16);
@@ -562,7 +576,27 @@
         }
 
         function draw() {
-            if (myPlayer.isAlive && !myPlayer.hasFinished) cameraY += (myPlayer.y - canvas.height * 0.7 - cameraY) * 0.1;
+            // 카메라 목표 위치 계산
+            let targetCameraY = cameraY;
+            
+            if (myPlayer.isAlive && !myPlayer.hasFinished) {
+                // 내가 살아있을 때는 나를 따라감
+                targetCameraY = myPlayer.y - canvas.height * 0.7;
+            } else {
+                // 내가 죽거나 통과했을 때: 남은 생존자 중 가장 앞서있는(y가 가장 작은) 사람을 관전
+                let bestY = Infinity;
+                [...bots, ...Object.values(remotePlayers)].forEach(c => {
+                    if (c.isAlive && !c.hasFinished && c.y < bestY) {
+                        bestY = c.y;
+                    }
+                });
+                if (bestY !== Infinity) {
+                    targetCameraY = bestY - canvas.height * 0.7;
+                }
+            }
+            
+            // 카메라 부드러운 이동 적용
+            cameraY += (targetCameraY - cameraY) * 0.1;
             if (cameraY < -150) cameraY = -150;
 
             ctx.clearRect(0, 0, canvas.width, canvas.height); ctx.save(); ctx.translate(0, -cameraY);
