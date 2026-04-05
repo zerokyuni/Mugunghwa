@@ -59,7 +59,8 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        // ❗ Firestore 대신 Realtime Database 모듈을 사용합니다.
+        import { getDatabase, ref, set, onValue, update, onDisconnect, remove } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-database.js";
 
         const firebaseConfig = {
             apiKey: "AIzaSyDQ6QT1gRdh0yTm8_yT6j__Bb-VDHwx4xE",
@@ -73,7 +74,7 @@
         
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
-        const db = getFirestore(app);
+        const db = getDatabase(app);
         const safeAppId = firebaseConfig.appId.replace(/[^a-zA-Z0-9]/g, '_'); 
 
         const UI = {
@@ -87,6 +88,7 @@
         let isHost = false;
         let forcedHostUid = null; 
         let oldestUid = null;     
+        let hostTimeout = null; 
 
         let gameState = 'CONNECTING'; 
         let currentStage = 1;
@@ -96,12 +98,13 @@
         let cameraY = WORLD_START_Y - 500;
         
         let roundStartTime = 0; 
+        let myJoinedAt = Date.now();
 
         let lastMoveTime = Date.now();
         let myPlayer = { 
             x: 0, y: WORLD_START_Y, radius: 18, stepSize: 10, lastFoot: null, 
             color: '#3b82f6', isAlive: true, hasFinished: false, name: '나', deathReason: '',
-            totalMeters: 0, currentMeters: 0, displayScore: 0
+            totalMeters: 0, currentMeters: 0, displayScore: 0, joinedAt: myJoinedAt
         };
         let remotePlayers = {};
         let bots = [];
@@ -140,8 +143,9 @@
         });
         window.dispatchEvent(new Event('resize'));
 
-        function getPlayersRef() { return collection(db, `artifacts/${safeAppId}/public/data/squid_players`); }
-        function getStateRef() { return doc(db, `artifacts/${safeAppId}/public/data/squid_state`, 'globalState'); }
+        function getPlayersRef() { return ref(db, `squid_rooms/${safeAppId}/players`); }
+        function getStateRef() { return ref(db, `squid_rooms/${safeAppId}/globalState`); }
+        function getMyPlayerRef() { return ref(db, `squid_rooms/${safeAppId}/players/${myUid}`); }
 
         UI.desc.innerText = "1단계: Firebase 인증 진행 중...";
         signInAnonymously(auth).catch((error) => {
@@ -155,6 +159,10 @@
                 myPlayer.name = '유저 ' + myUid.substring(0, 4);
                 myPlayer.color = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'][Math.floor(Math.random()*5)];
                 UI.desc.innerText = "2단계: 데이터베이스 접속 중...";
+                
+                // ❗ 브라우저를 닫거나 연결이 끊기면 서버에서 자동으로 내 캐릭터 데이터를 삭제 (가비지 컬렉터 역할)
+                onDisconnect(getMyPlayerRef()).remove();
+                
                 setupMultiplayer();
             }
         });
@@ -171,11 +179,18 @@
                 currentHost = oldestUid || myUid;
             }
 
-            if (currentHost === myUid && !isHost) {
-                isHost = true; 
-                if (bots.length === 0) initBots();
-            } else if (currentHost !== myUid && isHost) {
+            if (currentHost === myUid) {
+                if (!isHost) {
+                    if (!hostTimeout) {
+                        hostTimeout = setTimeout(() => {
+                            isHost = true; 
+                            if (bots.length === 0) initBots();
+                        }, 1000);
+                    }
+                }
+            } else {
                 isHost = false; 
+                if (hostTimeout) { clearTimeout(hostTimeout); hostTimeout = null; }
             }
         }
 
@@ -183,9 +198,9 @@
             const playersRef = getPlayersRef();
             const stateRef = getStateRef();
 
-            onSnapshot(stateRef, (docSnap) => {
-                if (docSnap.exists()) {
-                    const data = docSnap.data();
+            onValue(stateRef, (snapshot) => {
+                if (snapshot.exists()) {
+                    const data = snapshot.val();
                     tagger = { ...tagger, ...data.tagger };
                     bots = data.bots || [];
                     currentStage = data.stage || 1;
@@ -206,21 +221,19 @@
                 }
             }, (error) => {
                 UI.title.innerHTML = "<span class='text-red-500'>DB 에러</span>";
-                UI.desc.innerHTML = `<b class='text-red-300'>데이터베이스 권한이 없습니다.</b><br><span class="text-sm">${error.message}</span>`;
+                UI.desc.innerHTML = `<b class='text-red-300'>데이터베이스 권한이 없습니다.</b><br>Realtime Database 규칙을 확인하세요.`;
             });
 
-            onSnapshot(playersRef, (snapshot) => {
+            onValue(playersRef, (snapshot) => {
                 const now = Date.now();
                 oldestUid = myUid;
-                let oldestTime = now + 999999;
+                let oldestTime = myPlayer.joinedAt;
+                
                 let activeCount = 0;
-                const currentUids = [];
+                const dataObj = snapshot.val() || {};
+                const currentUids = Object.keys(dataObj);
 
-                snapshot.forEach(docSnap => {
-                    const data = docSnap.data();
-                    const uid = docSnap.id;
-                    currentUids.push(uid);
-                    
+                for (const [uid, data] of Object.entries(dataObj)) {
                     if (uid === myUid) {
                         if (myPlayer.isAlive && data.isAlive === false) {
                             myPlayer.isAlive = false;
@@ -232,7 +245,12 @@
                         }
                     }
 
-                    if (data.joinedAt < oldestTime) { oldestTime = data.joinedAt; oldestUid = uid; }
+                    if (data.joinedAt < oldestTime) { 
+                        oldestTime = data.joinedAt; 
+                        oldestUid = uid; 
+                    } else if (data.joinedAt === oldestTime && uid < oldestUid) {
+                        oldestUid = uid;
+                    }
 
                     if (uid !== myUid) {
                         if (!remotePlayers[uid]) remotePlayers[uid] = { ...data, displayY: data.y };
@@ -241,11 +259,10 @@
                             guardAnims.push({ active: true, x: canvas.width + 100, y: data.y, targetX: data.x, alpha: 1 });
                         }
                         
-                        // ❗ 버그 수정: localLastUpdate를 무조건 덮어쓰지 않고, 데이터에 명시된 lastActive를 그대로 유지합니다.
                         remotePlayers[uid] = { ...remotePlayers[uid], ...data };
                         activeCount++;
                     }
-                });
+                }
 
                 Object.keys(remotePlayers).forEach(uid => {
                     if (!currentUids.includes(uid)) delete remotePlayers[uid];
@@ -259,11 +276,17 @@
                     UI.desc.innerHTML = `서버 연결 성공!<br>현재 스테이지: ${currentStage}`;
                     UI.btnStart.classList.remove('hidden');
                 }
-            }, (error) => console.error(error));
+            });
 
-            setDoc(doc(playersRef, myUid), { ...myPlayer, joinedAt: Date.now(), lastActive: Date.now() }).catch(e => console.error(e));
-            setInterval(syncLocalPlayer, 200);
-            setInterval(syncHostState, 200);
+            // ❗ 불필요한 읽기/쓰기를 막기 위해 이벤트 기반+하트비트 동기화로 변경
+            update(getMyPlayerRef(), { ...myPlayer, lastActive: Date.now() });
+            
+            // 연결 유지(하트비트)용 3초 딜레이 (데이터 절약)
+            setInterval(() => {
+                if (gameState === 'PLAYING') syncLocalPlayer();
+            }, 3000);
+            
+            setInterval(syncHostState, 200); // 봇들의 부드러운 움직임을 위해 호스트는 200ms 유지
             requestAnimationFrame(gameLoop);
         }
 
@@ -279,22 +302,22 @@
         }
 
         function syncLocalPlayer() {
-            if (!myUid) return; // ❗ 게임 플레이 중이 아니더라도 계속 살아있다는 신호(heartbeat)를 보냅니다.
-            setDoc(doc(getPlayersRef(), myUid), { 
+            if (!myUid) return; 
+            update(getMyPlayerRef(), { 
                 y: myPlayer.y, isAlive: myPlayer.isAlive, hasFinished: myPlayer.hasFinished, 
                 lastFoot: myPlayer.lastFoot, deathReason: myPlayer.deathReason, lastMoveTime: lastMoveTime, lastActive: Date.now(),
                 displayScore: myPlayer.displayScore, color: myPlayer.color, name: myPlayer.name
-            }, { merge: true }).catch(() => {});
+            }).catch(() => {});
         }
 
         function syncHostState() {
             if (!isHost || gameState !== 'PLAYING') return;
             checkRoundProgression();
-            setDoc(getStateRef(), {
+            update(getStateRef(), {
                 stage: currentStage, status: gameState,
                 tagger: { isLookingFront: tagger.isLookingFront, speechBubble: tagger.speechBubble },
                 bots: bots.map(b => ({ id: b.id, y: b.y, stepSize: b.stepSize, stepInterval: b.stepInterval, lastFoot: b.lastFoot, isAlive: b.isAlive, hasFinished: b.hasFinished, color: b.color, name: b.name, caution: b.caution, reactionTime: b.reactionTime, nextStepTime: b.nextStepTime, lastMoveTime: b.lastMoveTime, displayScore: b.displayScore }))
-            }, { merge: true }).catch(() => {});
+            }).catch(() => {});
         }
 
         function checkRoundProgression() {
@@ -311,14 +334,14 @@
             if (gameState === 'PLAYING') {
                 if (humanClear > 0) {
                     gameState = 'RESET_PENDING';
-                    setDoc(getStateRef(), { status: 'CLEARED_PENDING', stage: currentStage }, { merge: true });
+                    update(getStateRef(), { status: 'CLEARED_PENDING', stage: currentStage });
                     setTimeout(() => {
                         currentStage++;
-                        setDoc(getStateRef(), { status: 'RESET', stage: currentStage }, { merge: true });
+                        update(getStateRef(), { status: 'RESET', stage: currentStage });
                     }, 3000);
                 } else if (humanRunners === 0) {
                     gameState = 'RESET_PENDING';
-                    setDoc(getStateRef(), { status: 'HUMANS_DEAD', stage: 1 }, { merge: true });
+                    update(getStateRef(), { status: 'HUMANS_DEAD', stage: 1 });
                 }
             }
         }
@@ -341,7 +364,7 @@
         function claimHostAndRestart() {
             UI.btnStart.classList.add('hidden');
             UI.desc.innerHTML = "게임을 초기화합니다...";
-            setDoc(getStateRef(), { status: 'RESET', stage: 1, forceHost: myUid }, { merge: true });
+            update(getStateRef(), { status: 'RESET', stage: 1, forceHost: myUid });
         }
 
         UI.btnStart.onclick = claimHostAndRestart; 
@@ -350,7 +373,6 @@
             gameState = 'PLAYING'; UI.overlay.style.display = 'none';
             roundStartTime = Date.now(); 
             
-            // ❗ 1라운드 시작 시 점수 완벽 초기화, 그 외에는 누적
             if (currentStage === 1) {
                 myPlayer.totalMeters = 0;
                 myPlayer.currentMeters = 0;
@@ -370,7 +392,6 @@
             if (isHost) {
                 if (bots.length === 0) initBots();
                 bots.forEach(b => {
-                    // ❗ 봇들도 1라운드 시작 시 점수 초기화
                     if (currentStage === 1) {
                         b.totalMeters = 0;
                         b.currentMeters = 0;
@@ -394,7 +415,7 @@
                 tagger.currentPattern = BASE_PATTERNS[0].map(p => ({ t: p.t, d: p.d * speedMultiplier }));
                 tagger.phraseIndex = 0;
             }
-            syncLocalPlayer();
+            syncLocalPlayer(); // 시작 시 위치 전송
         }
 
         function movePlayer(foot) {
@@ -411,7 +432,7 @@
                 UI.distText.innerText = myPlayer.currentMeters;
 
                 if (myPlayer.y <= WORLD_FINISH_Y) { myPlayer.hasFinished = true; myPlayer.y = WORLD_FINISH_Y - 30; }
-                syncLocalPlayer();
+                syncLocalPlayer(); // ❗ 이동할 때만 데이터를 전송합니다 (서버 부하 대폭 감소)
             }
         }
 
@@ -424,7 +445,7 @@
                 guardAnims.push({ active: true, x: canvas.width + 100, y: myPlayer.y, targetX: myPlayer.x, alpha: 1 }); 
                 myPlayer.x += 40; 
             }
-            syncLocalPlayer();
+            syncLocalPlayer(); // 죽었을 때 상태 전송
         }
 
         const btnLeft = document.getElementById('btnLeft');
@@ -449,15 +470,12 @@
             }
 
             if (isHost) {
+                // RTDB에서는 onDisconnect로 자동 청소되므로 호스트가 강제 삭제할 필요 없음
                 Object.keys(remotePlayers).forEach(uid => {
                     const rp = remotePlayers[uid];
-                    // ❗ 버그 1번 수정: 나간 유저의 마지막 생존기록(lastActive)만 비교하여 삭제합니다 (8초 미응답시 삭제).
-                    if (now - (rp.lastActive || 0) > 8000) {
-                        deleteDoc(doc(getPlayersRef(), uid)).catch(e=>console.error("Cleanup error:", e));
-                    }
-                    else if (gameState === 'PLAYING' && rp.isAlive && !rp.hasFinished) {
+                    if (gameState === 'PLAYING' && rp.isAlive && !rp.hasFinished) {
                         if (tagger.isLookingFront && (now - rp.lastMoveTime > 5000)) {
-                            setDoc(doc(getPlayersRef(), uid), { isAlive: false, deathReason: 'camp' }, { merge: true });
+                            update(ref(db, `squid_rooms/${safeAppId}/players/${uid}`), { isAlive: false, deathReason: 'camp' });
                         }
                     }
                 });
@@ -539,6 +557,7 @@
             
             ctx.translate(char.x, char.displayY);
             if (!char.isAlive) ctx.globalAlpha = 0.4;
+            
             ctx.fillStyle = char.color; ctx.fillRect(-15, 0, 30, 20);
             ctx.beginPath(); ctx.arc(0, -10, char.radius, 0, Math.PI * 2); ctx.fill();
 
@@ -552,50 +571,43 @@
                 ctx.beginPath(); ctx.moveTo(20, -30); ctx.lineTo(-20, 10); ctx.stroke();
             }
             
-            ctx.fillStyle = 'white'; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center';
-            let textY = -35;
-            
-            ctx.fillText(`${char.displayScore || 0}m`, 0, textY);
-            textY -= 15;
-            ctx.fillText(char.name, 0, textY);
-            textY -= 15;
+            let currentY = -32; 
+            ctx.textAlign = 'center';
 
             if (char.displayScore === maxScore && maxScore > 0) {
-                ctx.font = '16px sans-serif';
-                ctx.fillText('👑', 0, textY);
-                textY -= 18;
+                ctx.font = '18px sans-serif';
+                ctx.fillText('👑', 0, currentY);
+                currentY -= 18;
             }
 
-            if (char === myPlayer) {
+            if (char.id === myPlayer.id || char.name === myPlayer.name) { 
                 ctx.fillStyle = '#fcd34d'; 
                 ctx.font = 'bold 14px sans-serif';
-                ctx.fillText('나👇', 0, textY);
+                ctx.fillText('나👇', 0, currentY);
+                currentY -= 16;
             }
+
+            ctx.fillStyle = 'white'; 
+            ctx.font = 'bold 12px sans-serif';
+            ctx.fillText(`${char.displayScore || 0}m`, 0, currentY);
+            currentY -= 14;
+            ctx.fillText(char.name, 0, currentY);
 
             ctx.restore();
         }
 
         function draw() {
-            // 카메라 목표 위치 계산
             let targetCameraY = cameraY;
-            
             if (myPlayer.isAlive && !myPlayer.hasFinished) {
-                // 내가 살아있을 때는 나를 따라감
                 targetCameraY = myPlayer.y - canvas.height * 0.7;
             } else {
-                // 내가 죽거나 통과했을 때: 남은 생존자 중 가장 앞서있는(y가 가장 작은) 사람을 관전
                 let bestY = Infinity;
                 [...bots, ...Object.values(remotePlayers)].forEach(c => {
-                    if (c.isAlive && !c.hasFinished && c.y < bestY) {
-                        bestY = c.y;
-                    }
+                    if (c.isAlive && !c.hasFinished && c.y < bestY) { bestY = c.y; }
                 });
-                if (bestY !== Infinity) {
-                    targetCameraY = bestY - canvas.height * 0.7;
-                }
+                if (bestY !== Infinity) { targetCameraY = bestY - canvas.height * 0.7; }
             }
             
-            // 카메라 부드러운 이동 적용
             cameraY += (targetCameraY - cameraY) * 0.1;
             if (cameraY < -150) cameraY = -150;
 
