@@ -59,13 +59,13 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        // ❗ Firestore 대신 Realtime Database 모듈을 사용합니다.
         import { getDatabase, ref, set, onValue, update, onDisconnect, remove } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-database.js";
 
+        // ❗ 찾아주신 정확한 아시아 리전의 databaseURL로 업데이트했습니다.
         const firebaseConfig = {
             apiKey: "AIzaSyDQ6QT1gRdh0yTm8_yT6j__Bb-VDHwx4xE",
             authDomain: "mugunghwa-game-938ed.firebaseapp.com",
-            databaseURL: "https://mugunghwa-game-938ed-default-rtdb.firebaseio.com",
+            databaseURL: "https://mugunghwa-game-938ed-default-rtdb.asia-southeast1.firebasedatabase.app",
             projectId: "mugunghwa-game-938ed",
             storageBucket: "mugunghwa-game-938ed.firebasestorage.app",
             messagingSenderId: "500124015152",
@@ -148,8 +148,16 @@
         function getStateRef() { return ref(db, `squid_rooms/${safeAppId}/globalState`); }
         function getMyPlayerRef() { return ref(db, `squid_rooms/${safeAppId}/players/${myUid}`); }
 
+        const connectionTimeout = setTimeout(() => {
+            if (gameState === 'CONNECTING') {
+                UI.title.innerHTML = "<span class='text-red-500'>연결 지연</span>";
+                UI.desc.innerHTML = `<b class='text-red-300'>데이터베이스 응답이 없습니다.</b><br><span class="text-sm">Firebase 설정의 <b>databaseURL</b>이 정확한지 확인해주세요.<br>(한국 리전의 경우 끝부분이 다를 수 있습니다.)</span>`;
+            }
+        }, 5000);
+
         UI.desc.innerText = "1단계: Firebase 인증 진행 중...";
         signInAnonymously(auth).catch((error) => {
+            clearTimeout(connectionTimeout);
             UI.title.innerHTML = "<span class='text-red-500'>접속 에러</span>";
             UI.desc.innerHTML = `<b class='text-red-300'>인증에 실패했습니다.</b><br><span class="text-sm">${error.message}</span>`;
         });
@@ -161,9 +169,7 @@
                 myPlayer.color = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'][Math.floor(Math.random()*5)];
                 UI.desc.innerText = "2단계: 데이터베이스 접속 중...";
                 
-                // ❗ 브라우저를 닫거나 연결이 끊기면 서버에서 자동으로 내 캐릭터 데이터를 삭제 (가비지 컬렉터 역할)
                 onDisconnect(getMyPlayerRef()).remove();
-                
                 setupMultiplayer();
             }
         });
@@ -221,6 +227,7 @@
                     }
                 }
             }, (error) => {
+                clearTimeout(connectionTimeout);
                 UI.title.innerHTML = "<span class='text-red-500'>DB 에러</span>";
                 UI.desc.innerHTML = `<b class='text-red-300'>데이터베이스 권한이 없습니다.</b><br>Realtime Database 규칙을 확인하세요.`;
             });
@@ -273,21 +280,20 @@
                 resolveHost(); 
 
                 if (gameState === 'CONNECTING') {
+                    clearTimeout(connectionTimeout); // 정상 연결 성공 시 타이머 취소
                     UI.title.innerText = "준비 완료!";
                     UI.desc.innerHTML = `서버 연결 성공!<br>현재 스테이지: ${currentStage}`;
                     UI.btnStart.classList.remove('hidden');
                 }
             });
 
-            // ❗ 불필요한 읽기/쓰기를 막기 위해 이벤트 기반+하트비트 동기화로 변경
             update(getMyPlayerRef(), { ...myPlayer, lastActive: Date.now() });
             
-            // 연결 유지(하트비트)용 3초 딜레이 (데이터 절약)
             setInterval(() => {
                 if (gameState === 'PLAYING') syncLocalPlayer();
             }, 3000);
             
-            setInterval(syncHostState, 200); // 봇들의 부드러운 움직임을 위해 호스트는 200ms 유지
+            setInterval(syncHostState, 200);
             requestAnimationFrame(gameLoop);
         }
 
@@ -416,7 +422,7 @@
                 tagger.currentPattern = BASE_PATTERNS[0].map(p => ({ t: p.t, d: p.d * speedMultiplier }));
                 tagger.phraseIndex = 0;
             }
-            syncLocalPlayer(); // 시작 시 위치 전송
+            syncLocalPlayer(); 
         }
 
         function movePlayer(foot) {
@@ -433,7 +439,7 @@
                 UI.distText.innerText = myPlayer.currentMeters;
 
                 if (myPlayer.y <= WORLD_FINISH_Y) { myPlayer.hasFinished = true; myPlayer.y = WORLD_FINISH_Y - 30; }
-                syncLocalPlayer(); // ❗ 이동할 때만 데이터를 전송합니다 (서버 부하 대폭 감소)
+                syncLocalPlayer(); 
             }
         }
 
@@ -446,7 +452,7 @@
                 guardAnims.push({ active: true, x: canvas.width + 100, y: myPlayer.y, targetX: myPlayer.x, alpha: 1 }); 
                 myPlayer.x += 40; 
             }
-            syncLocalPlayer(); // 죽었을 때 상태 전송
+            syncLocalPlayer(); 
         }
 
         const btnLeft = document.getElementById('btnLeft');
@@ -471,7 +477,6 @@
             }
 
             if (isHost) {
-                // RTDB에서는 onDisconnect로 자동 청소되므로 호스트가 강제 삭제할 필요 없음
                 Object.keys(remotePlayers).forEach(uid => {
                     const rp = remotePlayers[uid];
                     if (gameState === 'PLAYING' && rp.isAlive && !rp.hasFinished) {
