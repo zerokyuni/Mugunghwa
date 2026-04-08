@@ -19,6 +19,7 @@
 </head>
 <body class="w-full h-full flex flex-col relative select-none font-sans">
 
+    <!-- 상단 UI -->
     <div class="absolute top-0 left-0 w-full p-4 flex justify-between items-start z-10 pointer-events-none">
         <div class="flex flex-col gap-2">
             <div class="bg-gray-900 bg-opacity-80 text-white px-4 py-2 rounded-full font-bold shadow-md text-sm md:text-base pointer-events-none">
@@ -37,6 +38,7 @@
 
     <canvas id="gameCanvas" class="flex-grow"></canvas>
 
+    <!-- 하단 컨트롤 -->
     <div id="controls" class="h-32 bg-gray-800 flex justify-between items-center p-4 gap-4 z-10 w-full shrink-0 shadow-[0_-4px_10px_rgba(0,0,0,0.3)]">
         <button id="btnLeft" class="step-btn flex-1 h-full bg-yellow-400 rounded-2xl text-2xl font-black text-gray-900 shadow-[0_8px_0_#b45309]">
             왼발 👣 (←)
@@ -46,6 +48,7 @@
         </button>
     </div>
 
+    <!-- 오버레이 UI -->
     <div id="uiOverlay" class="absolute inset-0 bg-black bg-opacity-80 flex flex-col items-center justify-center z-20 transition-opacity">
         <h1 id="uiTitle" class="text-5xl md:text-7xl font-black text-white mb-2 text-center drop-shadow-lg">접속 중...</h1>
         <p id="uiDesc" class="text-white text-lg md:text-xl mb-8 text-center px-6 leading-relaxed">
@@ -74,7 +77,7 @@
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getDatabase(app); 
-        const safeAppId = "game_v5_final";
+        const safeAppId = "game_v6_stable";
 
         const UI = {
             overlay: document.getElementById('uiOverlay'), title: document.getElementById('uiTitle'),
@@ -91,16 +94,15 @@
         let isHost = false;
         let gameState = 'CONNECTING'; 
         let currentStage = 1;
-        let targetMeters = 20;
-        let WORLD_START_Y = targetMeters * 20;
+        let WORLD_START_Y = 400;
         const WORLD_FINISH_Y = 0;
-        let cameraY = WORLD_START_Y - 500;
+        let cameraY = 0;
         let globalTaggerData = null; 
         let lastMoveTime = Date.now();
-        let invulnerableUntil = 0; // 시작 시 급사 방지용
+        let invulnerableUntil = 0; 
 
         let myPlayer = { 
-            x: 0, y: WORLD_START_Y, radius: 18, stepSize: 10, lastFoot: null, 
+            x: 0, targetX: 0, y: 0, radius: 18, stepSize: 10, lastFoot: null, 
             color: '#3b82f6', isAlive: true, hasFinished: false, name: '나', deathReason: '',
             displayScore: 0, joinedAt: Date.now(), lastActive: Date.now()
         };
@@ -110,8 +112,7 @@
         const BASE_PATTERNS = [
             [{t:'무',d:250},{t:'궁',d:250},{t:'화',d:250},{t:' ',d:0},{t:'꽃',d:200},{t:'이',d:200},{t:' ',d:0},{t:'피',d:150},{t:'었',d:150},{t:'습',d:150},{t:'니',d:100},{t:'다',d:100},{t:'!',d:300}], 
             [{t:'무~',d:600},{t:'궁~',d:600},{t:'화~',d:600},{t:' ',d:0},{t:'꽃',d:120},{t:'이',d:120},{t:'폈',d:120},{t:'다',d:120},{t:'!',d:200}], 
-            [{t:'무',d:80},{t:'궁',d:80},{t:'화',d:80},{t:'꽃',d:80},{t:'이',d:80},{t:'피',d:80},{t:'었',d:80},{t:'습',d:80},{t:'니',d:80},{t:'다',d:80},{t:'!',d:250}], 
-            [{t:'무',d:200},{t:'궁',d:200},{t:'화',d:200},{t:'꽃',d:200},{t:'핌',d:200},{t:'!',d:300}]
+            [{t:'무',d:80},{t:'궁',d:80},{t:'화',d:80},{t:'꽃',d:80},{t:'이',d:80},{t:'피',d:80},{t:'었',d:80},{t:'습',d:80},{t:'니',d:80},{t:'다',d:80},{t:'!',d:250}]
         ];
 
         let tagger = { x: 0, y: -80, radius: 28, isLookingFront: false, speechBubble: "", isPickingNext: false };
@@ -150,7 +151,7 @@
             const now = getSyncedNow();
             const activePlayers = Object.keys(playersData)
                 .map(uid => ({ uid, ...playersData[uid] }))
-                .filter(p => now - (p.lastActive || 0) < 4000) // 4초 내 활동 기준
+                .filter(p => now - (p.lastActive || 0) < 4000)
                 .sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
 
             const oldestActiveUid = activePlayers.length > 0 ? activePlayers[0].uid : myUid;
@@ -164,8 +165,6 @@
                 globalTaggerData = data.taggerData;
                 if (data.bots && !isHost) bots = data.bots;
                 currentStage = data.stage || 1;
-                targetMeters = currentStage * 20;
-                WORLD_START_Y = targetMeters * 20;
                 UI.stageText.innerText = currentStage;
 
                 if (data.status === 'PLAYING' && gameState !== 'PLAYING') startGame(true); 
@@ -187,7 +186,9 @@
                             myPlayer.deathReason = data.deathReason;
                         }
                     } else {
-                        if (!remotePlayers[uid]) remotePlayers[uid] = { ...data, x: canvas.width/2, displayY: data.y || WORLD_START_Y };
+                        if (!remotePlayers[uid]) {
+                            remotePlayers[uid] = { ...data, x: canvas.width / 2, displayY: data.y || WORLD_START_Y };
+                        }
                         remotePlayers[uid] = { ...remotePlayers[uid], ...data, localLastUpdate: now };
                     }
                 });
@@ -198,7 +199,7 @@
 
                 if (gameState === 'CONNECTING') {
                     UI.title.innerText = "준비 완료!";
-                    UI.desc.innerHTML = `탭을 내려도 게임이 멈추지 않습니다.<br>현재 스테이지: ${currentStage}`;
+                    UI.desc.innerHTML = `X축 떨림 현상을 해결했습니다.<br>현재 스테이지: ${currentStage}`;
                     UI.btnStart.classList.remove('hidden');
                 }
             });
@@ -215,10 +216,11 @@
 
         function initBots() {
             const speedMod = (currentStage - 1) * 16;
+            WORLD_START_Y = (currentStage * 20) * 20;
             bots = [
-                { id: 'bot1', y: WORLD_START_Y, stepSize: 12, stepInterval: Math.max(45, 100 - speedMod), lastFoot: 'left', color: '#ef4444', isAlive: true, hasFinished: false, name: '[BOT] 다혈질', caution: 0.80, displayScore: 0, joinedAt: 1 },
-                { id: 'bot2', y: WORLD_START_Y, stepSize: 11, stepInterval: Math.max(65, 130 - speedMod), lastFoot: 'left', color: '#a855f7', isAlive: true, hasFinished: false, name: '[BOT] 무난이', caution: 0.92, displayScore: 0, joinedAt: 2 },
-                { id: 'bot3', y: WORLD_START_Y, stepSize: 10, stepInterval: Math.max(85, 160 - speedMod), lastFoot: 'left', color: '#f97316', isAlive: true, hasFinished: false, name: '[BOT] 신중이', caution: 0.99, displayScore: 0, joinedAt: 3 }
+                { id: 'bot1', y: WORLD_START_Y, stepSize: 12, stepInterval: Math.max(45, 100 - speedMod), lastFoot: 'left', color: '#ef4444', isAlive: true, hasFinished: false, name: '[BOT] 다혈질', caution: 0.80, displayScore: 0, joinedAt: 1, x: 0, targetX: 0 },
+                { id: 'bot2', y: WORLD_START_Y, stepSize: 11, stepInterval: Math.max(65, 130 - speedMod), lastFoot: 'left', color: '#a855f7', isAlive: true, hasFinished: false, name: '[BOT] 무난이', caution: 0.92, displayScore: 0, joinedAt: 2, x: 0, targetX: 0 },
+                { id: 'bot3', y: WORLD_START_Y, stepSize: 10, stepInterval: Math.max(85, 160 - speedMod), lastFoot: 'left', color: '#f97316', isAlive: true, hasFinished: false, name: '[BOT] 신중이', caution: 0.99, displayScore: 0, joinedAt: 3, x: 0, targetX: 0 }
             ];
             bots.forEach(b => { b.displayY = b.y; });
         }
@@ -233,17 +235,11 @@
         }
 
         function setNextTaggerPattern() {
-            // 호스트 또는 호스트 대행자만 수행
             let pid = Math.floor(Math.random() * BASE_PATTERNS.length);
             let spd = Math.max(0.4, 1.0 - (currentStage - 1) * 0.08);
             let lookDur = 900 + Math.random() * 1100;
-
             update(STATE_REF, {
-                taggerData: { 
-                    patternId: pid, speed: spd, 
-                    startTime: getSyncedNow() + 800, 
-                    lookDuration: lookDur 
-                }
+                taggerData: { patternId: pid, speed: spd, startTime: getSyncedNow() + 800, lookDuration: lookDur }
             });
         }
 
@@ -257,7 +253,6 @@
             const humans = Object.values(remotePlayers).concat([myPlayer]);
             const humanRunners = humans.filter(p => p.isAlive && !p.hasFinished).length;
             const humanClear = humans.filter(p => p.hasFinished).length;
-
             if (gameState === 'PLAYING') {
                 if (humanClear > 0) {
                     update(STATE_REF, { status: 'CLEARED_PENDING' });
@@ -292,16 +287,13 @@
 
         function startGame(isAutoStart = false) {
             gameState = 'PLAYING'; UI.overlay.style.display = 'none';
-            targetMeters = currentStage * 20; WORLD_START_Y = targetMeters * 20;
+            const targetM = currentStage * 20; WORLD_START_Y = targetM * 20;
             myPlayer.y = WORLD_START_Y; myPlayer.isAlive = true; myPlayer.hasFinished = false; 
             myPlayer.displayScore = 0; myPlayer.deathReason = '';
             lastMoveTime = getSyncedNow(); cameraY = WORLD_START_Y - 500;
-            invulnerableUntil = getSyncedNow() + 800; // 시작 후 0.8초간 무적 (데이터 동기화 지연 대비)
+            invulnerableUntil = getSyncedNow() + 800; 
             guardAnims = []; 
-            
-            // DB 즉시 갱신 (시작하자마자 죽어있는 버그 해결)
             if (myUid) update(ref(db, `${ROOM_PATH}/players/${myUid}`), { isAlive: true, deathReason: '', y: WORLD_START_Y });
-
             if (isHost) {
                 if (bots.length === 0) initBots();
                 bots.forEach(b => { b.y = WORLD_START_Y; b.displayY = b.y; b.isAlive = true; b.hasFinished = false; });
@@ -311,10 +303,8 @@
 
         function movePlayer(foot) {
             if (gameState !== 'PLAYING' || !myPlayer.isAlive || myPlayer.hasFinished) return;
-            if (getSyncedNow() < invulnerableUntil) return; // 무적 시간 중 이동 무시
-
+            if (getSyncedNow() < invulnerableUntil) return;
             if (tagger.isLookingFront) { die('moved'); return; }
-
             if (myPlayer.lastFoot !== foot) {
                 myPlayer.y -= myPlayer.stepSize; myPlayer.lastFoot = foot;
                 lastMoveTime = getSyncedNow(); 
@@ -358,32 +348,15 @@
 
             if (gameState === 'PLAYING' && globalTaggerData) {
                 let elapsed = now - globalTaggerData.startTime;
-
-                if (elapsed < 0) {
-                    tagger.isLookingFront = false;
-                    tagger.speechBubble = "";
-                } else {
+                if (elapsed < 0) { tagger.isLookingFront = false; tagger.speechBubble = ""; } else {
                     let pattern = BASE_PATTERNS[globalTaggerData.patternId] || BASE_PATTERNS[0];
-                    let accTime = 0;
-                    let bubble = "";
-                    let isLooking = false;
-                    let isSpeaking = false;
-
+                    let accTime = 0; let bubble = ""; let isLooking = false; let isSpeaking = false;
                     for (let i = 0; i < pattern.length; i++) {
-                        let dur = pattern[i].d * globalTaggerData.speed;
-                        accTime += dur;
-                        if (elapsed < accTime) {
-                            bubble = pattern.slice(0, i + 1).map(p => p.t).join('');
-                            isSpeaking = true;
-                            break;
-                        }
+                        let dur = pattern[i].d * globalTaggerData.speed; accTime += dur;
+                        if (elapsed < accTime) { bubble = pattern.slice(0, i + 1).map(p => p.t).join(''); isSpeaking = true; break; }
                     }
-
                     if (!isSpeaking) {
-                        if (elapsed < accTime + globalTaggerData.lookDuration) {
-                            isLooking = true;
-                        } else {
-                            // 패턴이 종료되었는데 호스트가 잠들어서 갱신이 안되면, 내가 갱신함
+                        if (elapsed < accTime + globalTaggerData.lookDuration) { isLooking = true; } else {
                             if (!tagger.isPickingNext) {
                                 tagger.isPickingNext = true;
                                 setTimeout(() => {
@@ -395,8 +368,7 @@
                             }
                         }
                     }
-                    tagger.speechBubble = bubble;
-                    tagger.isLookingFront = isLooking;
+                    tagger.speechBubble = bubble; tagger.isLookingFront = isLooking;
                 }
             }
 
@@ -411,19 +383,25 @@
                             bot.lastMoveTime = now;
                             if (bot.y <= WORLD_FINISH_Y) bot.hasFinished = true;
                         }
-                    } else if (now - bot.lastMoveTime < 150) {
-                        bot.isAlive = false;
-                    }
+                    } else if (now - bot.lastMoveTime < 150) { bot.isAlive = false; }
                 });
             }
 
-            // 캐릭터 좌표 슬로팅 (박힘 현상 해결)
-            let allChars = [...bots, ...Object.values(remotePlayers), myPlayer];
-            const slotWidth = canvas.width / (allChars.length + 1);
-            allChars.sort((a,b) => (a.joinedAt || 0) - (b.joinedAt || 0)).forEach((c, i) => {
+            // 캐릭터 레인 고정 로직 (눈 아픈 현상 해결)
+            let allParticipants = [...bots, ...Object.values(remotePlayers), myPlayer];
+            allParticipants.sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
+            const totalCount = allParticipants.length;
+            const slotWidth = canvas.width / (totalCount + 1);
+
+            allParticipants.forEach((c, i) => {
                 const targetX = slotWidth * (i + 1);
-                if (!c.x) c.x = targetX;
-                c.x += (targetX - c.x) * 0.1;
+                // 처음 등장할 때나, 위치 차이가 클 때만 스무딩 적용, 미세한 차이는 무시하여 떨림 방지
+                if (!c.x || isNaN(c.x)) c.x = targetX;
+                if (Math.abs(c.x - targetX) > 0.5) {
+                    c.x += (targetX - c.x) * 0.1;
+                } else {
+                    c.x = targetX;
+                }
             });
         }
 
@@ -444,7 +422,6 @@
             char.displayY += ((char.y || WORLD_START_Y) - char.displayY) * 0.2;
             ctx.translate(char.x, char.displayY);
             if (!char.isAlive) ctx.globalAlpha = 0.4;
-            
             ctx.fillStyle = char.color; ctx.fillRect(-15, 0, 30, 20);
             ctx.beginPath(); ctx.arc(0, -10, char.radius, 0, Math.PI * 2); ctx.fill();
             ctx.fillStyle = '#111';
@@ -466,17 +443,13 @@
             if (myPlayer.isAlive) cameraY += (myPlayer.y - canvas.height * 0.7 - cameraY) * 0.1;
             ctx.clearRect(0, 0, canvas.width, canvas.height); 
             ctx.save(); ctx.translate(0, -cameraY);
-
             ctx.strokeStyle = 'rgba(0,0,0,0.1)'; ctx.lineWidth = 2;
             for (let i = 0; i <= WORLD_START_Y; i += 100) { ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(canvas.width, i); ctx.stroke(); }
             ctx.fillStyle = '#fca5a5'; ctx.fillRect(0, WORLD_FINISH_Y, canvas.width, 20);
-
             ctx.save(); ctx.translate(tagger.x, tagger.y); drawTagger(tagger); ctx.restore();
-
             bots.forEach(b => drawCharacter(b, false));
             Object.values(remotePlayers).forEach(p => drawCharacter(p, false));
             drawCharacter(myPlayer, true);
-
             guardAnims.forEach(anim => {
                 anim.x += (anim.targetX - anim.x) * 0.2;
                 ctx.save(); ctx.translate(anim.x, anim.y);
@@ -484,7 +457,6 @@
                 ctx.fillStyle = 'red'; ctx.font = 'bold 20px sans-serif'; ctx.textAlign='center'; ctx.fillText('캠핑 금지!', 0, -30); ctx.restore();
             });
             ctx.restore();
-
             if (!tagger.isLookingFront && tagger.speechBubble) {
                 ctx.save();
                 let fontSize = Math.min(36, (canvas.width * 0.8) / (tagger.speechBubble.length || 1));
@@ -506,7 +478,6 @@
         }
 
         function gameLoop() { updateLogic(); draw(); requestAnimationFrame(gameLoop); }
-
     </script>
 </body>
 </html>
