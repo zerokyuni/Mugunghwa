@@ -23,6 +23,7 @@
         <div class="flex flex-col gap-2">
             <div class="bg-gray-900 bg-opacity-80 text-white px-4 py-2 rounded-full font-bold shadow-md text-sm md:text-base pointer-events-none">
                 STAGE <span id="stageText" class="text-yellow-400">1</span>
+                <span id="hostStatus" class="ml-2 text-[10px] text-green-400 opacity-0 transition-opacity">HOSTING</span>
             </div>
         </div>
         <div class="flex flex-col gap-2 items-end pointer-events-none">
@@ -52,7 +53,7 @@
             Firebase 서버와 동기화하고 있습니다.<br>잠시만 기다려주세요!
         </p>
         <button id="btnStart" class="hidden bg-green-500 hover:bg-green-400 text-white px-10 py-5 rounded-full text-2xl md:text-3xl font-bold shadow-[0_6px_0_#166534] active:translate-y-2 transition-all animate-pulse">
-            게임 난입하기
+            게임 시작하기
         </button>
     </div>
 
@@ -74,23 +75,22 @@
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getDatabase(app); 
-        const safeAppId = "game_v3_stable";
+        const safeAppId = "game_v4_stable";
 
         const UI = {
             overlay: document.getElementById('uiOverlay'), title: document.getElementById('uiTitle'),
             desc: document.getElementById('uiDesc'), btnStart: document.getElementById('btnStart'),
             distText: document.getElementById('distText'), stageText: document.getElementById('stageText'),
-            playerCount: document.getElementById('playerCount')
+            playerCount: document.getElementById('playerCount'),
+            hostStatus: document.getElementById('hostStatus')
         };
 
-        // --- 서버 시간 동기화 ---
         let serverOffset = 0;
         const getSyncedNow = () => Date.now() + serverOffset;
         onValue(ref(db, ".info/serverTimeOffset"), (snap) => { serverOffset = snap.val() || 0; });
 
         let myUid = null;
         let isHost = false;
-        let forcedHostUid = null; 
 
         let gameState = 'CONNECTING'; 
         let currentStage = 1;
@@ -105,12 +105,11 @@
         let myPlayer = { 
             x: 0, y: WORLD_START_Y, radius: 18, stepSize: 10, lastFoot: null, 
             color: '#3b82f6', isAlive: true, hasFinished: false, name: '나', deathReason: '',
-            totalMeters: 0, currentMeters: 0, displayScore: 0, joinedAt: Date.now() 
+            displayScore: 0, joinedAt: Date.now(), lastActive: Date.now()
         };
         let remotePlayers = {};
         let bots = [];
         
-        // 원본 패턴 데이터
         const BASE_PATTERNS = [
             [{t:'무',d:250},{t:'궁',d:250},{t:'화',d:250},{t:' ',d:0},{t:'꽃',d:200},{t:'이',d:200},{t:' ',d:0},{t:'피',d:150},{t:'었',d:150},{t:'습',d:150},{t:'니',d:100},{t:'다',d:100},{t:'!',d:300}], 
             [{t:'무~',d:600},{t:'궁~',d:600},{t:'화~',d:600},{t:' ',d:0},{t:'꽃',d:120},{t:'이',d:120},{t:'폈',d:120},{t:'다',d:120},{t:'!',d:200}], 
@@ -120,8 +119,8 @@
         ];
 
         let tagger = {
-            x: 0, y: -80, radius: 28, isLookingFront: false, state: 'WAITING',
-            speechBubble: "", phraseIndex: 0, currentPattern: [], isPickingNext: false
+            x: 0, y: -80, radius: 28, isLookingFront: false,
+            speechBubble: "", isPickingNext: false
         };
         let guardAnims = []; 
 
@@ -148,22 +147,38 @@
                     myPlayer.color = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'][Math.floor(Math.random()*5)];
                     const myRef = ref(db, `${ROOM_PATH}/players/${myUid}`);
                     onDisconnect(myRef).remove();
-                    set(myRef, { ...myPlayer, joinedAt: serverTimestamp() });
+                    set(myRef, { ...myPlayer, joinedAt: serverTimestamp(), lastActive: serverTimestamp() });
                     setupMultiplayer();
                 }
             });
         });
 
-        function resolveHost(oldestUid) {
+        // 잠수 방지 및 호스트 자동 위임 로직
+        function resolveHost(playersData) {
             if (!myUid) return;
-            let currentHost = forcedHostUid || oldestUid;
-            if (currentHost === myUid && !isHost) {
-                isHost = true; 
-                if (bots.length === 0) initBots();
-                // 호스트가 되었는데 술래 데이터가 없으면 즉시 시작
-                if (!globalTaggerData && gameState === 'PLAYING') setNextTaggerPattern();
-            } else if (currentHost !== myUid && isHost) {
-                isHost = false; 
+            const now = getSyncedNow();
+            const currentUids = Object.keys(playersData);
+            
+            // 최근 3초 이내에 활동한 플레이어만 호스트 후보로 선정
+            const activePlayers = currentUids
+                .map(uid => ({ uid, ...playersData[uid] }))
+                .filter(p => now - (p.lastActive || 0) < 3500)
+                .sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
+
+            const oldestActiveUid = activePlayers.length > 0 ? activePlayers[0].uid : myUid;
+
+            if (oldestActiveUid === myUid) {
+                if (!isHost) {
+                    isHost = true;
+                    UI.hostStatus.style.opacity = "1";
+                    if (bots.length === 0) initBots();
+                    if (!globalTaggerData && gameState === 'PLAYING') setNextTaggerPattern();
+                }
+            } else {
+                if (isHost) {
+                    isHost = false;
+                    UI.hostStatus.style.opacity = "0";
+                }
             }
         }
 
@@ -178,7 +193,6 @@
                 targetMeters = currentStage * 20;
                 WORLD_START_Y = targetMeters * 20;
                 UI.stageText.innerText = currentStage;
-                if (data.forceHost) forcedHostUid = data.forceHost;
 
                 if (data.status === 'PLAYING' && gameState !== 'PLAYING') startGame(true); 
                 else if (data.status === 'CLEARED_PENDING' && gameState !== 'ENDED') triggerGlobalReset('CLEARED');
@@ -188,8 +202,6 @@
 
             onValue(PLAYERS_REF, (snapshot) => {
                 const now = getSyncedNow();
-                let oldestUid = myUid;
-                let oldestTime = Infinity;
                 const playersData = snapshot.val() || {};
                 const currentUids = Object.keys(playersData);
 
@@ -204,19 +216,27 @@
                         if (!remotePlayers[uid]) remotePlayers[uid] = { ...data, displayY: data.y };
                         remotePlayers[uid] = { ...remotePlayers[uid], ...data, localLastUpdate: now };
                     }
-                    if (data.joinedAt && data.joinedAt < oldestTime) { oldestTime = data.joinedAt; oldestUid = uid; }
                 });
 
                 Object.keys(remotePlayers).forEach(uid => { if (!currentUids.includes(uid)) delete remotePlayers[uid]; });
                 UI.playerCount.innerText = currentUids.length;
-                resolveHost(oldestUid); 
+                
+                resolveHost(playersData); 
 
                 if (gameState === 'CONNECTING') {
                     UI.title.innerText = "준비 완료!";
-                    UI.desc.innerHTML = `서버 연결 성공! 스테이지: ${currentStage}`;
+                    UI.desc.innerHTML = `호스트 자동 위임 시스템 활성화.<br>현재 스테이지: ${currentStage}`;
                     UI.btnStart.classList.remove('hidden');
                 }
             });
+
+            // 0.5초마다 내 활동 정보를 서버에 보고 (호스트 선출 기준)
+            setInterval(() => {
+                if (!myUid) return;
+                update(ref(db, `${ROOM_PATH}/players/${myUid}`), { 
+                    lastActive: serverTimestamp() 
+                });
+            }, 500);
 
             setInterval(syncLocalPlayer, 150); 
             setInterval(syncHostState, 200); 
@@ -252,10 +272,10 @@
                 taggerData: { 
                     patternId: pid, 
                     speed: spd, 
-                    startTime: getSyncedNow() + 1000, 
+                    startTime: getSyncedNow() + 800, 
                     lookDuration: lookDur 
                 }
-            }).catch(e => console.error(e));
+            });
         }
 
         function syncHostState() {
@@ -274,7 +294,7 @@
                     update(STATE_REF, { status: 'CLEARED_PENDING' });
                     setTimeout(() => {
                         currentStage++;
-                        update(STATE_REF, { status: 'RESET', stage: currentStage, forceHost: myUid });
+                        update(STATE_REF, { status: 'RESET', stage: currentStage });
                     }, 3000);
                 } else if (humanRunners === 0 && bots.every(b => !b.isAlive || b.hasFinished)) {
                     update(STATE_REF, { status: 'HUMANS_DEAD' });
@@ -297,7 +317,7 @@
         }
 
         UI.btnStart.onclick = () => {
-            update(STATE_REF, { status: 'PLAYING', stage: currentStage, taggerData: null });
+            update(STATE_REF, { status: 'PLAYING', stage: currentStage });
             startGame(false);
         };
 
@@ -337,7 +357,6 @@
             syncLocalPlayer();
         }
 
-        // 화살표 키 조작 복구
         window.addEventListener('keydown', (e) => {
             if (gameState !== 'PLAYING' || !myPlayer.isAlive) return;
             if (e.key === 'ArrowLeft') { movePlayer('left'); btnLeft.classList.add('active'); setTimeout(()=> btnLeft.classList.remove('active'), 100); }
@@ -359,7 +378,6 @@
                 if (now - lastMoveTime > 5000 && tagger.isLookingFront) die('camp'); 
             }
 
-            // 술래 상태 동기화 로직
             if (gameState === 'PLAYING' && globalTaggerData) {
                 let elapsed = now - globalTaggerData.startTime;
 
@@ -392,7 +410,7 @@
                                 setTimeout(() => {
                                     setNextTaggerPattern();
                                     tagger.isPickingNext = false;
-                                }, 500);
+                                }, 300);
                             }
                         }
                     }
@@ -418,15 +436,13 @@
                 });
             }
 
-            let slotIndex = 1;
-            const keys = Object.keys(remotePlayers);
-            const slotWidth = canvas.width / (keys.length + bots.length + 2);
-            bots.forEach(b => { b.x = slotWidth * slotIndex++; });
-            myPlayer.x = slotWidth * slotIndex++;
-            keys.forEach(k => { remotePlayers[k].x = slotWidth * slotIndex++; });
+            let allChars = [...bots, ...Object.values(remotePlayers), myPlayer];
+            const slotWidth = canvas.width / (allChars.length + 1);
+            allChars.sort((a,b) => (a.joinedAt || 0) - (b.joinedAt || 0)).forEach((c, i) => {
+                c.x = slotWidth * (i + 1);
+            });
         }
 
-        // --- 원본 고퀄리티 드로잉 로직 ---
         function drawTagger(t) {
             ctx.fillStyle = '#ec4899'; ctx.beginPath(); ctx.arc(0, 20, 20, Math.PI, 0); ctx.fill(); 
             ctx.beginPath(); ctx.arc(0, 0, t.radius, 0, Math.PI * 2);
@@ -485,7 +501,6 @@
             });
             ctx.restore();
 
-            // 말풍선 배경 복구
             if (!tagger.isLookingFront && tagger.speechBubble) {
                 ctx.save();
                 let fontSize = Math.min(36, (canvas.width * 0.8) / (tagger.speechBubble.length || 1));
