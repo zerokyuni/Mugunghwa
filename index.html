@@ -19,7 +19,6 @@
 </head>
 <body class="w-full h-full flex flex-col relative select-none font-sans">
 
-    <!-- 상단 UI -->
     <div class="absolute top-0 left-0 w-full p-4 flex justify-between items-start z-10 pointer-events-none">
         <div class="flex flex-col gap-2">
             <div class="bg-gray-900 bg-opacity-80 text-white px-4 py-2 rounded-full font-bold shadow-md text-sm md:text-base pointer-events-none">
@@ -38,7 +37,6 @@
 
     <canvas id="gameCanvas" class="flex-grow"></canvas>
 
-    <!-- 하단 컨트롤 -->
     <div id="controls" class="h-32 bg-gray-800 flex justify-between items-center p-4 gap-4 z-10 w-full shrink-0 shadow-[0_-4px_10px_rgba(0,0,0,0.3)]">
         <button id="btnLeft" class="step-btn flex-1 h-full bg-yellow-400 rounded-2xl text-2xl font-black text-gray-900 shadow-[0_8px_0_#b45309]">
             왼발 👣 (←)
@@ -48,11 +46,10 @@
         </button>
     </div>
 
-    <!-- 오버레이 UI -->
     <div id="uiOverlay" class="absolute inset-0 bg-black bg-opacity-80 flex flex-col items-center justify-center z-20 transition-opacity">
         <h1 id="uiTitle" class="text-5xl md:text-7xl font-black text-white mb-2 text-center drop-shadow-lg">접속 중...</h1>
         <p id="uiDesc" class="text-white text-lg md:text-xl mb-8 text-center px-6 leading-relaxed">
-            Firebase 서버와 동기화하고 있습니다.<br>잠시만 기다려주세요!
+            서버와 데이터를 동기화하고 있습니다.<br>잠시만 기다려주세요!
         </p>
         <button id="btnStart" class="hidden bg-green-500 hover:bg-green-400 text-white px-10 py-5 rounded-full text-2xl md:text-3xl font-bold shadow-[0_6px_0_#166534] active:translate-y-2 transition-all animate-pulse">
             게임 시작하기
@@ -77,7 +74,7 @@
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getDatabase(app); 
-        const safeAppId = "game_v6_stable";
+        const safeAppId = "game_v9_stable"; 
 
         const UI = {
             overlay: document.getElementById('uiOverlay'), title: document.getElementById('uiTitle'),
@@ -94,6 +91,7 @@
         let isHost = false;
         let gameState = 'CONNECTING'; 
         let currentStage = 1;
+        let lastSyncedStage = 0;
         let WORLD_START_Y = 400;
         const WORLD_FINISH_Y = 0;
         let cameraY = 0;
@@ -102,7 +100,7 @@
         let invulnerableUntil = 0; 
 
         let myPlayer = { 
-            x: 0, targetX: 0, y: 0, radius: 18, stepSize: 10, lastFoot: null, 
+            x: 0, y: 0, radius: 18, stepSize: 10, lastFoot: null, 
             color: '#3b82f6', isAlive: true, hasFinished: false, name: '나', deathReason: '',
             displayScore: 0, joinedAt: Date.now(), lastActive: Date.now()
         };
@@ -112,7 +110,19 @@
         const BASE_PATTERNS = [
             [{t:'무',d:250},{t:'궁',d:250},{t:'화',d:250},{t:' ',d:0},{t:'꽃',d:200},{t:'이',d:200},{t:' ',d:0},{t:'피',d:150},{t:'었',d:150},{t:'습',d:150},{t:'니',d:100},{t:'다',d:100},{t:'!',d:300}], 
             [{t:'무~',d:600},{t:'궁~',d:600},{t:'화~',d:600},{t:' ',d:0},{t:'꽃',d:120},{t:'이',d:120},{t:'폈',d:120},{t:'다',d:120},{t:'!',d:200}], 
-            [{t:'무',d:80},{t:'궁',d:80},{t:'화',d:80},{t:'꽃',d:80},{t:'이',d:80},{t:'피',d:80},{t:'었',d:80},{t:'습',d:80},{t:'니',d:80},{t:'다',d:80},{t:'!',d:250}]
+            [{t:'무',d:200},{t:'궁',d:200},{t:'화',d:200},{t:' ',d:0},{t:'꽃~',d:1000},{t:'~이',d:300},{t:' ',d:0},{t:'피',d:150},{t:'었',d:150},{t:'습',d:100},{t:'니',d:100},{t:'닷',d:100},{t:'!',d:200}], 
+            [{t:'무',d:80},{t:'궁',d:80},{t:'화',d:80},{t:'꽃',d:80},{t:'이',d:80},{t:'피',d:80},{t:'었',d:80},{t:'습',d:80},{t:'니',d:80},{t:'닷',d:80},{t:'!',d:250}], 
+            [{t:'무',d:200},{t:'궁',d:200},{t:'화',d:200},{t:' ',d:0},{t:'꽃',d:200},{t:'이',d:200},{t:' ',d:0},{t:'피',d:150},{t:'었',d:150},{t:'습',d:150},{t:'니~',d:600},{t:'다~',d:600},{t:'!',d:200}], 
+            [{t:'무',d:40},{t:'궁',d:40},{t:'화',d:40},{t:'꽃',d:40},{t:'이',d:40},{t:'피',d:40},{t:'었',d:40},{t:'습',d:40},{t:'니',d:40},{t:'다',d:40},{t:'!',d:100}], 
+            [{t:'무',d:150},{t:'궁',d:150},{t:'화',d:150},{t:'...',d:1000},{t:'꽃',d:50},{t:'이',d:50},{t:'피',d:50},{t:'었',d:50},{t:'습',d:50},{t:'니',d:50},{t:'다',d:50},{t:'!',d:150}], 
+            [{t:'무',d:300},{t:'궁',d:50},{t:'화',d:300},{t:'꽃',d:50},{t:'이',d:300},{t:'피',d:50},{t:'었',d:300},{t:'습',d:50},{t:'니',d:300},{t:'다',d:50},{t:'!',d:200}], 
+            [{t:'무궁화 ',d:150},{t:'꽃이 ',d:150},{t:'피었',d:100},{t:'습니다!',d:100}], 
+            [{t:'무',d:50},{t:'궁',d:50},{t:'화',d:50},{t:'꽃',d:50},{t:'폈',d:50},{t:'다',d:50},{t:'!',d:150}], 
+            [{t:'무',d:60},{t:'궁',d:60},{t:'화',d:60},{t:'꽃',d:60},{t:'핌',d:60},{t:'!',d:120}], 
+            [{t:'무~~~~',d:900},{t:'궁',d:100},{t:'화',d:100},{t:'꽃 ',d:200},{t:'이~~ ',d:700},{t:'피~ ',d:500},{t:'었~~~ ',d:800},{t:'습',d:100},{t:'니',d:100},{t:'다',d:100},{t:'!',d:200}], 
+            [{t:'무  ',d:250},{t:'궁',d:100},{t:'화',d:100},{t:'꽃',d:100},{t:'잎 ',d:200},{t:'이',d:100},{t:'피',d:100},{t:'었 ',d:200},{t:'슴',d:100},{t:'다',d:100},{t:'!',d:200}], 
+            [{t:'The ',d:200},{t:'hi',d:100},{t:'bis',d:100},{t:'cus ',d:200},{t:'has ',d:200},{t:'bloom',d:150},{t:'ed',d:150},{t:'!',d:250}], 
+            [{t:'무',d:150},{t:'궁',d:150},{t:'화',d:150},{t:' ',d:0},{t:'꽃',d:150},{t:'이',d:150},{t:' ',d:0},{t:'피',d:150},{t:'었',d:150},{t:'습',d:150},{t:'니',d:150},{t:'...',d:1500},{t:'다',d:30},{t:'!',d:50}]
         ];
 
         let tagger = { x: 0, y: -80, radius: 28, isLookingFront: false, speechBubble: "", isPickingNext: false };
@@ -141,44 +151,53 @@
                     myPlayer.color = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'][Math.floor(Math.random()*5)];
                     const myRef = ref(db, `${ROOM_PATH}/players/${myUid}`);
                     onDisconnect(myRef).remove();
-                    set(myRef, { ...myPlayer, joinedAt: serverTimestamp(), lastActive: serverTimestamp() });
+                    set(myRef, { 
+                        uid: myUid, y: 0, isAlive: true, joinedAt: serverTimestamp(), 
+                        lastActive: serverTimestamp(), color: myPlayer.color, name: myPlayer.name
+                    });
                     setupMultiplayer();
                 }
             });
         });
 
-        function resolveHost(playersData) {
-            const now = getSyncedNow();
-            const activePlayers = Object.keys(playersData)
-                .map(uid => ({ uid, ...playersData[uid] }))
-                .filter(p => now - (p.lastActive || 0) < 4000)
-                .sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
-
-            const oldestActiveUid = activePlayers.length > 0 ? activePlayers[0].uid : myUid;
-            isHost = (oldestActiveUid === myUid);
-        }
-
         function setupMultiplayer() {
             onValue(STATE_REF, (snapshot) => {
                 const data = snapshot.val();
                 if (!data) return;
+                
                 globalTaggerData = data.taggerData;
                 if (data.bots && !isHost) bots = data.bots;
+                
+                // 스테이지 동기화
                 currentStage = data.stage || 1;
                 UI.stageText.innerText = currentStage;
-
-                if (data.status === 'PLAYING' && gameState !== 'PLAYING') startGame(true); 
-                else if (data.status === 'CLEARED_PENDING' && gameState !== 'ENDED') triggerGlobalReset('CLEARED');
-                else if (data.status === 'HUMANS_DEAD' && gameState !== 'ENDED') triggerGlobalReset('ALL_DEAD_MANUAL');
-                else if (data.status === 'RESET') startGame(true); 
+                
+                if (data.status === 'PLAYING' && gameState !== 'PLAYING') {
+                    startGame(true); 
+                } else if (data.status === 'CLEARED_PENDING' && gameState !== 'ENDED') {
+                    triggerGlobalReset('CLEARED');
+                } else if (data.status === 'HUMANS_DEAD' && gameState !== 'ENDED') {
+                    triggerGlobalReset('ALL_DEAD_MANUAL');
+                } else if (data.status === 'RESET') {
+                    // 서버에서 리셋 명령이 내려오면 즉시 재시작
+                    if (lastSyncedStage !== data.stage) {
+                        lastSyncedStage = data.stage;
+                        startGame(true);
+                    }
+                }
             });
 
             onValue(PLAYERS_REF, (snapshot) => {
                 const now = getSyncedNow();
                 const playersData = snapshot.val() || {};
-                const currentUids = Object.keys(playersData);
+                const uids = Object.keys(playersData);
+                const activeOnes = uids.map(id => ({id, ...playersData[id]}))
+                                       .filter(p => now - (p.lastActive || 0) < 4000)
+                                       .sort((a,b) => (a.joinedAt || 0) - (b.joinedAt || 0));
 
-                currentUids.forEach(uid => {
+                isHost = (activeOnes.length > 0 && activeOnes[0].id === myUid);
+                
+                uids.forEach(uid => {
                     const data = playersData[uid];
                     if (uid === myUid) {
                         if (myPlayer.isAlive && data.isAlive === false) {
@@ -186,31 +205,27 @@
                             myPlayer.deathReason = data.deathReason;
                         }
                     } else {
-                        if (!remotePlayers[uid]) {
-                            remotePlayers[uid] = { ...data, x: canvas.width / 2, displayY: data.y || WORLD_START_Y };
-                        }
+                        if (!remotePlayers[uid]) remotePlayers[uid] = { ...data, x: 0, displayY: data.y || 400 };
                         remotePlayers[uid] = { ...remotePlayers[uid], ...data, localLastUpdate: now };
                     }
                 });
 
-                Object.keys(remotePlayers).forEach(uid => { if (!currentUids.includes(uid)) delete remotePlayers[uid]; });
-                UI.playerCount.innerText = currentUids.length;
-                resolveHost(playersData); 
+                Object.keys(remotePlayers).forEach(uid => { if (!uids.includes(uid)) delete remotePlayers[uid]; });
+                UI.playerCount.innerText = uids.length;
 
                 if (gameState === 'CONNECTING') {
                     UI.title.innerText = "준비 완료!";
-                    UI.desc.innerHTML = `X축 떨림 현상을 해결했습니다.<br>현재 스테이지: ${currentStage}`;
+                    UI.desc.innerHTML = `테스트 버전 .<br>서버 동기화 성공.`;
                     UI.btnStart.classList.remove('hidden');
                 }
             });
 
             setInterval(() => {
-                if (!myUid) return;
-                update(ref(db, `${ROOM_PATH}/players/${myUid}`), { lastActive: serverTimestamp() });
+                if (myUid) update(ref(db, `${ROOM_PATH}/players/${myUid}`), { lastActive: serverTimestamp() });
             }, 800);
 
-            setInterval(syncLocalPlayer, 150); 
-            setInterval(syncHostState, 200); 
+            setInterval(syncLocalPlayer, 200); 
+            setInterval(syncHostState, 300); 
             requestAnimationFrame(gameLoop);
         }
 
@@ -218,9 +233,9 @@
             const speedMod = (currentStage - 1) * 16;
             WORLD_START_Y = (currentStage * 20) * 20;
             bots = [
-                { id: 'bot1', y: WORLD_START_Y, stepSize: 12, stepInterval: Math.max(45, 100 - speedMod), lastFoot: 'left', color: '#ef4444', isAlive: true, hasFinished: false, name: '[BOT] 다혈질', caution: 0.80, displayScore: 0, joinedAt: 1, x: 0, targetX: 0 },
-                { id: 'bot2', y: WORLD_START_Y, stepSize: 11, stepInterval: Math.max(65, 130 - speedMod), lastFoot: 'left', color: '#a855f7', isAlive: true, hasFinished: false, name: '[BOT] 무난이', caution: 0.92, displayScore: 0, joinedAt: 2, x: 0, targetX: 0 },
-                { id: 'bot3', y: WORLD_START_Y, stepSize: 10, stepInterval: Math.max(85, 160 - speedMod), lastFoot: 'left', color: '#f97316', isAlive: true, hasFinished: false, name: '[BOT] 신중이', caution: 0.99, displayScore: 0, joinedAt: 3, x: 0, targetX: 0 }
+                { id: 'bot1', y: WORLD_START_Y, stepSize: 12, stepInterval: Math.max(45, 100 - speedMod), lastFoot: 'left', color: '#ef4444', isAlive: true, hasFinished: false, name: '[BOT] 다혈질', joinedAt: 1 },
+                { id: 'bot2', y: WORLD_START_Y, stepSize: 11, stepInterval: Math.max(65, 130 - speedMod), lastFoot: 'left', color: '#a855f7', isAlive: true, hasFinished: false, name: '[BOT] 무난이', joinedAt: 2 },
+                { id: 'bot3', y: WORLD_START_Y, stepSize: 10, stepInterval: Math.max(85, 160 - speedMod), lastFoot: 'left', color: '#f97316', isAlive: true, hasFinished: false, name: '[BOT] 신중이', joinedAt: 3 }
             ];
             bots.forEach(b => { b.displayY = b.y; });
         }
@@ -228,41 +243,57 @@
         function syncLocalPlayer() {
             if (!myUid || gameState !== 'PLAYING') return;
             update(ref(db, `${ROOM_PATH}/players/${myUid}`), { 
-                y: myPlayer.y, isAlive: myPlayer.isAlive, hasFinished: myPlayer.hasFinished, 
-                lastFoot: myPlayer.lastFoot, deathReason: myPlayer.deathReason, lastMoveTime: lastMoveTime, 
-                displayScore: myPlayer.displayScore, color: myPlayer.color, name: myPlayer.name
+                y: myPlayer.y, isAlive: !!myPlayer.isAlive, hasFinished: !!myPlayer.hasFinished, 
+                lastFoot: myPlayer.lastFoot || 'left', deathReason: myPlayer.deathReason || '', 
+                lastMoveTime: lastMoveTime || 0, displayScore: myPlayer.displayScore || 0
             });
         }
 
         function setNextTaggerPattern() {
+            if (!isHost || gameState !== 'PLAYING') return;
             let pid = Math.floor(Math.random() * BASE_PATTERNS.length);
             let spd = Math.max(0.4, 1.0 - (currentStage - 1) * 0.08);
-            let lookDur = 900 + Math.random() * 1100;
+            let lookDur = 1000 + Math.random() * 1000;
+            
+            // 패턴 예약 시점을 1.5초 뒤로 설정하여 모든 유저가 충분히 인지하게 함
             update(STATE_REF, {
-                taggerData: { patternId: pid, speed: spd, startTime: getSyncedNow() + 800, lookDuration: lookDur }
+                taggerData: { patternId: pid, speed: spd, startTime: getSyncedNow() + 1500, lookDuration: lookDur }
             });
         }
 
         function syncHostState() {
             if (!isHost || gameState !== 'PLAYING') return;
             checkRoundProgression();
-            update(STATE_REF, { stage: currentStage, status: gameState, bots: bots });
+            const botData = bots.map(b => ({
+                id: b.id, y: b.y, lastFoot: b.lastFoot, isAlive: b.isAlive, 
+                hasFinished: b.hasFinished, name: b.name, color: b.color, joinedAt: b.joinedAt,
+                displayScore: b.displayScore || 0
+            }));
+            update(STATE_REF, { stage: currentStage, status: gameState, bots: botData });
         }
 
         function checkRoundProgression() {
+            if (!isHost || gameState !== 'PLAYING') return;
+            
             const humans = Object.values(remotePlayers).concat([myPlayer]);
-            const humanRunners = humans.filter(p => p.isAlive && !p.hasFinished).length;
-            const humanClear = humans.filter(p => p.hasFinished).length;
-            if (gameState === 'PLAYING') {
-                if (humanClear > 0) {
-                    update(STATE_REF, { status: 'CLEARED_PENDING' });
-                    setTimeout(() => {
-                        currentStage++;
-                        update(STATE_REF, { status: 'RESET', stage: currentStage });
-                    }, 3000);
-                } else if (humanRunners === 0 && bots.every(b => !b.isAlive || b.hasFinished)) {
-                    update(STATE_REF, { status: 'HUMANS_DEAD' });
-                }
+            const alive = humans.filter(p => p.isAlive && !p.hasFinished).length;
+            const cleared = humans.filter(p => p.hasFinished).length;
+            
+            if (cleared > 0) {
+                // 스테이지 클리어
+                update(STATE_REF, { status: 'CLEARED_PENDING' });
+                setTimeout(() => { 
+                    if (!isHost) return; // 호스트가 바뀌었을 수도 있음
+                    const nextStage = currentStage + 1;
+                    update(STATE_REF, { 
+                        status: 'RESET', 
+                        stage: nextStage,
+                        taggerData: null, // 다음 스테이지를 위해 데이터 비움
+                        bots: [] 
+                    });
+                }, 4000); // 4초 여유
+            } else if (alive === 0 && bots.every(b => !b.isAlive || b.hasFinished)) {
+                update(STATE_REF, { status: 'HUMANS_DEAD' });
             }
         }
 
@@ -270,14 +301,28 @@
             gameState = 'ENDED'; UI.overlay.style.display = 'flex';
             if (reason === 'CLEARED') {
                 UI.title.innerHTML = "라운드 종료!"; UI.title.className = "text-5xl font-black text-yellow-400 mb-2";
-                UI.desc.innerHTML = `누군가 결승선에 도착했습니다!<br>생존자 모두 다음 라운드로 진출합니다.`;
+                UI.desc.innerHTML = `결승선 도착! 다음 라운드로 진출합니다.<br><span class="text-sm">잠시 후 자동 시작됩니다...</span>`;
                 UI.btnStart.classList.add('hidden');
             } else {
                 UI.title.innerHTML = "인간 전멸!"; UI.title.className = "text-6xl font-black text-red-500 mb-2";
                 UI.desc.innerHTML = `모든 플레이어가 탈락했습니다.`;
-                UI.btnStart.innerText = "다시 시작";
+                UI.btnStart.innerText = "다시 시작 (STAGE 1)";
                 UI.btnStart.classList.remove('hidden');
+                UI.btnStart.onclick = claimHostAndRestart;
             }
+        }
+
+        function claimHostAndRestart() {
+            UI.btnStart.classList.add('hidden');
+            UI.desc.innerHTML = "게임 데이터를 초기화 중입니다...";
+            update(STATE_REF, { 
+                status: 'RESET', 
+                stage: 1, 
+                taggerData: null, 
+                bots: [] 
+            }).then(() => {
+                startGame(false);
+            });
         }
 
         UI.btnStart.onclick = () => {
@@ -288,15 +333,32 @@
         function startGame(isAutoStart = false) {
             gameState = 'PLAYING'; UI.overlay.style.display = 'none';
             const targetM = currentStage * 20; WORLD_START_Y = targetM * 20;
-            myPlayer.y = WORLD_START_Y; myPlayer.isAlive = true; myPlayer.hasFinished = false; 
-            myPlayer.displayScore = 0; myPlayer.deathReason = '';
-            lastMoveTime = getSyncedNow(); cameraY = WORLD_START_Y - 500;
-            invulnerableUntil = getSyncedNow() + 800; 
+            
+            // 위치 즉시 초기화 (도착 버그 해결)
+            myPlayer.y = WORLD_START_Y; 
+            myPlayer.isAlive = true; 
+            myPlayer.hasFinished = false; 
+            myPlayer.displayScore = 0; 
+            myPlayer.deathReason = '';
+            
+            lastMoveTime = getSyncedNow(); 
+            cameraY = WORLD_START_Y - 500;
+            invulnerableUntil = getSyncedNow() + 1500; // 스테이지 시작 후 1.5초간 무적 (로딩 지연 대비)
             guardAnims = []; 
-            if (myUid) update(ref(db, `${ROOM_PATH}/players/${myUid}`), { isAlive: true, deathReason: '', y: WORLD_START_Y });
+            
+            if (myUid) update(ref(db, `${ROOM_PATH}/players/${myUid}`), { 
+                isAlive: true, deathReason: '', y: WORLD_START_Y, displayScore: 0, hasFinished: false 
+            });
+
             if (isHost) {
                 if (bots.length === 0) initBots();
-                bots.forEach(b => { b.y = WORLD_START_Y; b.displayY = b.y; b.isAlive = true; b.hasFinished = false; });
+                bots.forEach(b => { 
+                    b.y = WORLD_START_Y; 
+                    b.displayY = b.y; 
+                    b.isAlive = true; 
+                    b.hasFinished = false; 
+                    b.displayScore = 0;
+                });
                 setNextTaggerPattern();
             }
         }
@@ -320,7 +382,6 @@
             myPlayer.isAlive = false; myPlayer.deathReason = reason;
             if (reason === 'camp') { 
                 guardAnims.push({ active: true, x: canvas.width + 100, y: myPlayer.y, targetX: myPlayer.x, alpha: 1 }); 
-                myPlayer.x += 40; 
             }
             syncLocalPlayer();
         }
@@ -352,7 +413,7 @@
                     let pattern = BASE_PATTERNS[globalTaggerData.patternId] || BASE_PATTERNS[0];
                     let accTime = 0; let bubble = ""; let isLooking = false; let isSpeaking = false;
                     for (let i = 0; i < pattern.length; i++) {
-                        let dur = pattern[i].d * globalTaggerData.speed; accTime += dur;
+                        let dur = (pattern[i].d || 0) * globalTaggerData.speed; accTime += dur;
                         if (elapsed < accTime) { bubble = pattern.slice(0, i + 1).map(p => p.t).join(''); isSpeaking = true; break; }
                     }
                     if (!isSpeaking) {
@@ -360,11 +421,12 @@
                             if (!tagger.isPickingNext) {
                                 tagger.isPickingNext = true;
                                 setTimeout(() => {
+                                    // 릴레이 호스팅: 호스트 부재 시 1초 뒤 강제 트리거
                                     if (isHost || (now - (globalTaggerData.startTime + accTime + globalTaggerData.lookDuration) > 1000)) {
                                         setNextTaggerPattern();
                                     }
                                     tagger.isPickingNext = false;
-                                }, 200);
+                                }, 300);
                             }
                         }
                     }
@@ -387,21 +449,15 @@
                 });
             }
 
-            // 캐릭터 레인 고정 로직 (눈 아픈 현상 해결)
             let allParticipants = [...bots, ...Object.values(remotePlayers), myPlayer];
             allParticipants.sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
-            const totalCount = allParticipants.length;
-            const slotWidth = canvas.width / (totalCount + 1);
+            const slotWidth = canvas.width / (allParticipants.length + 1);
 
             allParticipants.forEach((c, i) => {
                 const targetX = slotWidth * (i + 1);
-                // 처음 등장할 때나, 위치 차이가 클 때만 스무딩 적용, 미세한 차이는 무시하여 떨림 방지
                 if (!c.x || isNaN(c.x)) c.x = targetX;
-                if (Math.abs(c.x - targetX) > 0.5) {
-                    c.x += (targetX - c.x) * 0.1;
-                } else {
-                    c.x = targetX;
-                }
+                if (Math.abs(c.x - targetX) > 0.5) { c.x += (targetX - c.x) * 0.1; } 
+                else { c.x = targetX; }
             });
         }
 
@@ -418,8 +474,8 @@
 
         function drawCharacter(char, isMe) {
             ctx.save();
-            if (char.displayY === undefined) char.displayY = char.y || WORLD_START_Y;
-            char.displayY += ((char.y || WORLD_START_Y) - char.displayY) * 0.2;
+            if (char.displayY === undefined) char.displayY = char.y || 400;
+            char.displayY += ((char.y || 400) - char.displayY) * 0.2;
             ctx.translate(char.x, char.displayY);
             if (!char.isAlive) ctx.globalAlpha = 0.4;
             ctx.fillStyle = char.color; ctx.fillRect(-15, 0, 30, 20);
@@ -444,7 +500,7 @@
             ctx.clearRect(0, 0, canvas.width, canvas.height); 
             ctx.save(); ctx.translate(0, -cameraY);
             ctx.strokeStyle = 'rgba(0,0,0,0.1)'; ctx.lineWidth = 2;
-            for (let i = 0; i <= WORLD_START_Y; i += 100) { ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(canvas.width, i); ctx.stroke(); }
+            for (let i = 0; i <= WORLD_START_Y + 200; i += 100) { ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(canvas.width, i); ctx.stroke(); }
             ctx.fillStyle = '#fca5a5'; ctx.fillRect(0, WORLD_FINISH_Y, canvas.width, 20);
             ctx.save(); ctx.translate(tagger.x, tagger.y); drawTagger(tagger); ctx.restore();
             bots.forEach(b => drawCharacter(b, false));
