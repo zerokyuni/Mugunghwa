@@ -59,9 +59,8 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getDatabase, ref, update, onValue, onDisconnect, remove, set } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-database.js";
+        import { getDatabase, ref, update, onValue, onDisconnect, remove, set, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-database.js";
 
-        // ❗ 요청하신 asia-southeast1 RTDB URL로 교체되었습니다 ❗
         const firebaseConfig = {
             apiKey: "AIzaSyDQ6QT1gRdh0yTm8_yT6j__Bb-VDHwx4xE",
             authDomain: "mugunghwa-game-938ed.firebaseapp.com",
@@ -69,14 +68,13 @@
             projectId: "mugunghwa-game-938ed",
             storageBucket: "mugunghwa-game-938ed.firebasestorage.app",
             messagingSenderId: "500124015152",
-            appId: "1:500124015152:web:2e24d8ef54d388ce01abf5",
-            measurementId: "G-VZHJ59HYBS"
+            appId: "1:500124015152:web:2e24d8ef54d388ce01abf5"
         };
         
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getDatabase(app); 
-        const safeAppId = firebaseConfig.appId.replace(/[^a-zA-Z0-9]/g, '_'); 
+        const safeAppId = "game_v3_stable";
 
         const UI = {
             overlay: document.getElementById('uiOverlay'), title: document.getElementById('uiTitle'),
@@ -84,6 +82,11 @@
             distText: document.getElementById('distText'), stageText: document.getElementById('stageText'),
             playerCount: document.getElementById('playerCount')
         };
+
+        // --- 서버 시간 동기화 ---
+        let serverOffset = 0;
+        const getSyncedNow = () => Date.now() + serverOffset;
+        onValue(ref(db, ".info/serverTimeOffset"), (snap) => { serverOffset = snap.val() || 0; });
 
         let myUid = null;
         let isHost = false;
@@ -96,10 +99,9 @@
         const WORLD_FINISH_Y = 0;
         let cameraY = WORLD_START_Y - 500;
         
-        let roundStartTime = 0; 
         let globalTaggerData = null; 
-
         let lastMoveTime = Date.now();
+
         let myPlayer = { 
             x: 0, y: WORLD_START_Y, radius: 18, stepSize: 10, lastFoot: null, 
             color: '#3b82f6', isAlive: true, hasFinished: false, name: '나', deathReason: '',
@@ -108,22 +110,13 @@
         let remotePlayers = {};
         let bots = [];
         
+        // 원본 패턴 데이터
         const BASE_PATTERNS = [
             [{t:'무',d:250},{t:'궁',d:250},{t:'화',d:250},{t:' ',d:0},{t:'꽃',d:200},{t:'이',d:200},{t:' ',d:0},{t:'피',d:150},{t:'었',d:150},{t:'습',d:150},{t:'니',d:100},{t:'다',d:100},{t:'!',d:300}], 
             [{t:'무~',d:600},{t:'궁~',d:600},{t:'화~',d:600},{t:' ',d:0},{t:'꽃',d:120},{t:'이',d:120},{t:'폈',d:120},{t:'다',d:120},{t:'!',d:200}], 
             [{t:'무',d:200},{t:'궁',d:200},{t:'화',d:200},{t:' ',d:0},{t:'꽃~',d:1000},{t:'~이',d:300},{t:' ',d:0},{t:'피',d:150},{t:'었',d:150},{t:'습',d:100},{t:'니',d:100},{t:'닷',d:100},{t:'!',d:200}], 
             [{t:'무',d:80},{t:'궁',d:80},{t:'화',d:80},{t:'꽃',d:80},{t:'이',d:80},{t:'피',d:80},{t:'었',d:80},{t:'습',d:80},{t:'니',d:80},{t:'닷',d:80},{t:'!',d:250}], 
-            [{t:'무',d:200},{t:'궁',d:200},{t:'화',d:200},{t:' ',d:0},{t:'꽃',d:200},{t:'이',d:200},{t:' ',d:0},{t:'피',d:150},{t:'었',d:150},{t:'습',d:150},{t:'니~',d:600},{t:'다~',d:600},{t:'!',d:200}], 
-            [{t:'무',d:40},{t:'궁',d:40},{t:'화',d:40},{t:'꽃',d:40},{t:'이',d:40},{t:'피',d:40},{t:'었',d:40},{t:'습',d:40},{t:'니',d:40},{t:'다',d:40},{t:'!',d:100}], 
-            [{t:'무',d:150},{t:'궁',d:150},{t:'화',d:150},{t:'...',d:1000},{t:'꽃',d:50},{t:'이',d:50},{t:'피',d:50},{t:'었',d:50},{t:'습',d:50},{t:'니',d:50},{t:'다',d:50},{t:'!',d:150}], 
-            [{t:'무',d:300},{t:'궁',d:50},{t:'화',d:300},{t:'꽃',d:50},{t:'이',d:300},{t:'피',d:50},{t:'었',d:300},{t:'습',d:50},{t:'니',d:300},{t:'다',d:50},{t:'!',d:200}], 
-            [{t:'무궁화 ',d:150},{t:'꽃이 ',d:150},{t:'피었',d:100},{t:'습니다!',d:100}], 
-            [{t:'무',d:50},{t:'궁',d:50},{t:'화',d:50},{t:'꽃',d:50},{t:'폈',d:50},{t:'다',d:50},{t:'!',d:150}], 
-            [{t:'무',d:60},{t:'궁',d:60},{t:'화',d:60},{t:'꽃',d:60},{t:'핌',d:60},{t:'!',d:120}], 
-            [{t:'무~~~~',d:900},{t:'궁',d:100},{t:'화',d:100},{t:'꽃 ',d:200},{t:'이~~ ',d:700},{t:'피~ ',d:500},{t:'었~~~ ',d:800},{t:'습',d:100},{t:'니',d:100},{t:'다',d:100},{t:'!',d:200}], 
-            [{t:'무  ',d:250},{t:'궁',d:100},{t:'화',d:100},{t:'꽃',d:100},{t:'잎 ',d:200},{t:'이',d:100},{t:'피',d:100},{t:'었 ',d:200},{t:'슴',d:100},{t:'다',d:100},{t:'!',d:200}], 
-            [{t:'The ',d:200},{t:'hi',d:100},{t:'bis',d:100},{t:'cus ',d:200},{t:'has ',d:200},{t:'bloom',d:150},{t:'ed',d:150},{t:'!',d:250}], 
-            [{t:'무',d:150},{t:'궁',d:150},{t:'화',d:150},{t:' ',d:0},{t:'꽃',d:150},{t:'이',d:150},{t:' ',d:0},{t:'피',d:150},{t:'었',d:150},{t:'습',d:150},{t:'니',d:150},{t:'...',d:1500},{t:'다',d:30},{t:'!',d:50}]
+            [{t:'무',d:200},{t:'궁',d:200},{t:'화',d:200},{t:' ',d:0},{t:'꽃',d:200},{t:'이',d:200},{t:' ',d:0},{t:'피',d:150},{t:'었',d:150},{t:'습',d:150},{t:'니~',d:600},{t:'다~',d:600},{t:'!',d:200}]
         ];
 
         let tagger = {
@@ -135,56 +128,40 @@
         const canvas = document.getElementById('gameCanvas');
         const ctx = canvas.getContext('2d');
         
-        window.addEventListener('resize', () => {
+        function resize() {
             canvas.width = window.innerWidth;
             canvas.height = window.innerHeight - document.getElementById('controls').offsetHeight;
             tagger.x = canvas.width / 2;
-        });
-        window.dispatchEvent(new Event('resize'));
+        }
+        window.addEventListener('resize', resize);
+        resize();
 
-        // RTDB 경로 설정
         const ROOM_PATH = `rooms/${safeAppId}/squid`;
         const PLAYERS_REF = ref(db, `${ROOM_PATH}/players`);
         const STATE_REF = ref(db, `${ROOM_PATH}/globalState`);
 
-        UI.desc.innerText = "1단계: Firebase 인증 진행 중...";
-        signInAnonymously(auth).catch((error) => {
-            UI.title.innerHTML = "<span class='text-red-500'>접속 에러</span>";
-            UI.desc.innerHTML = `<b class='text-red-300'>인증에 실패했습니다.</b><br><span class="text-sm">${error.message}</span>`;
-        });
-        
-        onAuthStateChanged(auth, (user) => {
-            if (user) {
-                myUid = user.uid;
-                myPlayer.name = '유저 ' + myUid.substring(0, 4);
-                myPlayer.color = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'][Math.floor(Math.random()*5)];
-                
-                onDisconnect(ref(db, `${ROOM_PATH}/players/${myUid}`)).remove();
-                
-                UI.desc.innerText = "2단계: RTDB 접속 중...";
-                setupMultiplayer();
-            }
+        signInAnonymously(auth).then(() => {
+            onAuthStateChanged(auth, (user) => {
+                if (user) {
+                    myUid = user.uid;
+                    myPlayer.name = '유저 ' + myUid.substring(0, 4);
+                    myPlayer.color = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'][Math.floor(Math.random()*5)];
+                    const myRef = ref(db, `${ROOM_PATH}/players/${myUid}`);
+                    onDisconnect(myRef).remove();
+                    set(myRef, { ...myPlayer, joinedAt: serverTimestamp() });
+                    setupMultiplayer();
+                }
+            });
         });
 
         function resolveHost(oldestUid) {
             if (!myUid) return;
-            const now = Date.now();
-            let currentHost = forcedHostUid;
-            let hostIsOnline = false;
-
-            if (currentHost === myUid) {
-                hostIsOnline = true;
-            } else if (currentHost && remotePlayers[currentHost]) {
-                if (now - (remotePlayers[currentHost].localLastUpdate || 0) < 10000) hostIsOnline = true;
-            }
-
-            if (!currentHost || !hostIsOnline) {
-                currentHost = oldestUid || myUid;
-            }
-
+            let currentHost = forcedHostUid || oldestUid;
             if (currentHost === myUid && !isHost) {
                 isHost = true; 
                 if (bots.length === 0) initBots();
+                // 호스트가 되었는데 술래 데이터가 없으면 즉시 시작
+                if (!globalTaggerData && gameState === 'PLAYING') setNextTaggerPattern();
             } else if (currentHost !== myUid && isHost) {
                 isHost = false; 
             }
@@ -195,43 +172,24 @@
                 const data = snapshot.val();
                 if (!data) return;
                 
-                if (data.taggerData) globalTaggerData = data.taggerData;
-                
-                if (data.bots && !isHost) {
-                    data.bots.forEach(newBot => {
-                        let existingBot = bots.find(b => b.id === newBot.id);
-                        if (existingBot) newBot.displayY = existingBot.displayY;
-                        else newBot.displayY = newBot.y;
-                    });
-                    bots = data.bots;
-                } else if (data.bots && isHost && bots.length === 0) bots = data.bots;
-
+                globalTaggerData = data.taggerData;
+                if (data.bots && !isHost) bots = data.bots;
                 currentStage = data.stage || 1;
                 targetMeters = currentStage * 20;
                 WORLD_START_Y = targetMeters * 20;
                 UI.stageText.innerText = currentStage;
-                
                 if (data.forceHost) forcedHostUid = data.forceHost;
 
-                if (data.status === 'PLAYING' && gameState !== 'PLAYING') {
-                    startGame(true); 
-                } else if (data.status === 'CLEARED_PENDING' && gameState !== 'ENDED') {
-                    triggerGlobalReset('CLEARED');
-                } else if (data.status === 'HUMANS_DEAD' && gameState !== 'ENDED') {
-                    triggerGlobalReset('ALL_DEAD_MANUAL');
-                } else if (data.status === 'RESET' && gameState !== 'PLAYING') {
-                    startGame(true); 
-                }
-            }, (error) => {
-                UI.title.innerHTML = "<span class='text-red-500'>DB 에러</span>";
-                UI.desc.innerHTML = `<b class='text-red-300'>데이터베이스 권한이 없습니다.</b><br><span class="text-sm">${error.message}</span>`;
+                if (data.status === 'PLAYING' && gameState !== 'PLAYING') startGame(true); 
+                else if (data.status === 'CLEARED_PENDING' && gameState !== 'ENDED') triggerGlobalReset('CLEARED');
+                else if (data.status === 'HUMANS_DEAD' && gameState !== 'ENDED') triggerGlobalReset('ALL_DEAD_MANUAL');
+                else if (data.status === 'RESET') startGame(true); 
             });
 
             onValue(PLAYERS_REF, (snapshot) => {
-                const now = Date.now();
+                const now = getSyncedNow();
                 let oldestUid = myUid;
-                let oldestTime = myPlayer.joinedAt;
-                let activeCount = 0;
+                let oldestTime = Infinity;
                 const playersData = snapshot.val() || {};
                 const currentUids = Object.keys(playersData);
 
@@ -241,53 +199,36 @@
                         if (myPlayer.isAlive && data.isAlive === false) {
                             myPlayer.isAlive = false;
                             myPlayer.deathReason = data.deathReason;
-                            if (data.deathReason === 'camp') {
-                                guardAnims.push({ active: true, x: canvas.width + 100, y: myPlayer.y, targetX: myPlayer.x, alpha: 1 });
-                                myPlayer.x += 40; 
-                            }
                         }
                     } else {
                         if (!remotePlayers[uid]) remotePlayers[uid] = { ...data, displayY: data.y };
-                        
-                        if (remotePlayers[uid].isAlive && data.isAlive === false && data.deathReason === 'camp') {
-                            guardAnims.push({ active: true, x: canvas.width + 100, y: data.y, targetX: data.x, alpha: 1 });
-                        }
                         remotePlayers[uid] = { ...remotePlayers[uid], ...data, localLastUpdate: now };
-                        activeCount++;
-
-                        if (now - remotePlayers[uid].localLastUpdate < 10000) {
-                            if (data.joinedAt < oldestTime) { oldestTime = data.joinedAt; oldestUid = uid; }
-                        }
                     }
+                    if (data.joinedAt && data.joinedAt < oldestTime) { oldestTime = data.joinedAt; oldestUid = uid; }
                 });
 
-                Object.keys(remotePlayers).forEach(uid => {
-                    if (!currentUids.includes(uid)) delete remotePlayers[uid];
-                });
-
-                UI.playerCount.innerText = activeCount + 1;
+                Object.keys(remotePlayers).forEach(uid => { if (!currentUids.includes(uid)) delete remotePlayers[uid]; });
+                UI.playerCount.innerText = currentUids.length;
                 resolveHost(oldestUid); 
 
                 if (gameState === 'CONNECTING') {
                     UI.title.innerText = "준비 완료!";
-                    UI.desc.innerHTML = `서버 연결 성공!<br>현재 스테이지: ${currentStage}`;
+                    UI.desc.innerHTML = `서버 연결 성공! 스테이지: ${currentStage}`;
                     UI.btnStart.classList.remove('hidden');
                 }
-            }, (error) => console.error(error));
+            });
 
-            syncLocalPlayer(); 
             setInterval(syncLocalPlayer, 150); 
             setInterval(syncHostState, 200); 
             requestAnimationFrame(gameLoop);
         }
 
         function initBots() {
-            const speedMod = Math.max(0, (currentStage - 1) * 16);
-            const reactMod = Math.max(0, (currentStage - 1) * 12);
+            const speedMod = (currentStage - 1) * 16;
             bots = [
-                { id: 'bot1', y: WORLD_START_Y, stepSize: 12, stepInterval: Math.max(45, 100 - speedMod), lastFoot: 'left', color: '#ef4444', isAlive: true, hasFinished: false, name: '[BOT] 다혈질', caution: 0.80, nextStepTime: 0, reactionTime: Math.max(35, 120 - reactMod), totalMeters: 0, currentMeters: 0, displayScore: 0, lastMoveTime: 0 },
-                { id: 'bot2', y: WORLD_START_Y, stepSize: 11, stepInterval: Math.max(65, 130 - speedMod), lastFoot: 'left', color: '#a855f7', isAlive: true, hasFinished: false, name: '[BOT] 무난이', caution: 0.92, nextStepTime: 0, reactionTime: Math.max(25, 80 - reactMod), totalMeters: 0, currentMeters: 0, displayScore: 0, lastMoveTime: 0 },
-                { id: 'bot3', y: WORLD_START_Y, stepSize: 10, stepInterval: Math.max(85, 160 - speedMod), lastFoot: 'left', color: '#f97316', isAlive: true, hasFinished: false, name: '[BOT] 신중이', caution: 0.99, nextStepTime: 0, reactionTime: Math.max(15, 50 - reactMod), totalMeters: 0, currentMeters: 0, displayScore: 0, lastMoveTime: 0 }
+                { id: 'bot1', y: WORLD_START_Y, stepSize: 12, stepInterval: Math.max(45, 100 - speedMod), lastFoot: 'left', color: '#ef4444', isAlive: true, hasFinished: false, name: '[BOT] 다혈질', caution: 0.80, displayScore: 0, lastMoveTime: 0 },
+                { id: 'bot2', y: WORLD_START_Y, stepSize: 11, stepInterval: Math.max(65, 130 - speedMod), lastFoot: 'left', color: '#a855f7', isAlive: true, hasFinished: false, name: '[BOT] 무난이', caution: 0.92, displayScore: 0, lastMoveTime: 0 },
+                { id: 'bot3', y: WORLD_START_Y, stepSize: 10, stepInterval: Math.max(85, 160 - speedMod), lastFoot: 'left', color: '#f97316', isAlive: true, hasFinished: false, name: '[BOT] 신중이', caution: 0.99, displayScore: 0, lastMoveTime: 0 }
             ];
             bots.forEach(b => { b.displayY = b.y; });
         }
@@ -295,62 +236,48 @@
         function syncLocalPlayer() {
             if (!myUid || gameState !== 'PLAYING') return;
             update(ref(db, `${ROOM_PATH}/players/${myUid}`), { 
-                y: myPlayer.y || 0, isAlive: myPlayer.isAlive === true, hasFinished: myPlayer.hasFinished === true, 
-                lastFoot: myPlayer.lastFoot || 'left', deathReason: myPlayer.deathReason || '', lastMoveTime: lastMoveTime || 0, 
-                lastActive: Date.now(), joinedAt: myPlayer.joinedAt, displayScore: myPlayer.displayScore || 0, 
-                color: myPlayer.color || '#3b82f6', name: myPlayer.name || '나'
-            }).catch(e => console.error(e));
+                y: myPlayer.y, isAlive: myPlayer.isAlive, hasFinished: myPlayer.hasFinished, 
+                lastFoot: myPlayer.lastFoot, deathReason: myPlayer.deathReason, lastMoveTime: lastMoveTime, 
+                displayScore: myPlayer.displayScore, color: myPlayer.color, name: myPlayer.name
+            });
         }
 
-        function setNextTaggerPattern(startTime) {
-            let maxPatternIndex = Math.min(BASE_PATTERNS.length, 2 + currentStage * 2);
-            let pid = Math.floor(Math.random() * maxPatternIndex);
+        function setNextTaggerPattern() {
+            if (!isHost) return;
+            let pid = Math.floor(Math.random() * BASE_PATTERNS.length);
             let spd = Math.max(0.4, 1.0 - (currentStage - 1) * 0.08);
-            let lookDur = Math.max(200, 700 - currentStage * 50) + Math.random() * 600;
+            let lookDur = 800 + Math.random() * 1000;
 
             update(STATE_REF, {
-                taggerData: { patternId: pid, speed: spd, startTime: startTime, lookDuration: lookDur }
-            }).catch(e => console.error("Pattern Set Error:", e));
+                taggerData: { 
+                    patternId: pid, 
+                    speed: spd, 
+                    startTime: getSyncedNow() + 1000, 
+                    lookDuration: lookDur 
+                }
+            }).catch(e => console.error(e));
         }
 
         function syncHostState() {
             if (!isHost || gameState !== 'PLAYING') return;
             checkRoundProgression();
-            if (gameState !== 'PLAYING') return; 
-
-            const safeBots = bots.map(b => ({
-                id: b.id, y: b.y || 0, stepSize: b.stepSize || 10, stepInterval: b.stepInterval || 100, 
-                lastFoot: b.lastFoot || 'left', isAlive: b.isAlive === true, hasFinished: b.hasFinished === true, 
-                color: b.color || '#000', name: b.name || 'BOT', caution: b.caution || 0.5, 
-                reactionTime: b.reactionTime || 100, nextStepTime: b.nextStepTime || 0, lastMoveTime: b.lastMoveTime || 0, 
-                displayScore: b.displayScore || 0, totalMeters: b.totalMeters || 0, currentMeters: b.currentMeters || 0
-            }));
-
-            update(STATE_REF, { stage: currentStage, status: gameState, bots: safeBots }).catch(e => console.error(e));
+            update(STATE_REF, { stage: currentStage, status: gameState, bots: bots });
         }
 
         function checkRoundProgression() {
-            if (Date.now() - roundStartTime < 3000) return;
-            let humanRunners = 0; let humanClear = 0;
             const humans = Object.values(remotePlayers).concat([myPlayer]);
-
-            humans.forEach(p => {
-                if (p.isAlive && !p.hasFinished) humanRunners++;
-                if (p.hasFinished) humanClear++;
-            });
+            const humanRunners = humans.filter(p => p.isAlive && !p.hasFinished).length;
+            const humanClear = humans.filter(p => p.hasFinished).length;
 
             if (gameState === 'PLAYING') {
                 if (humanClear > 0) {
-                    gameState = 'RESET_PENDING';
-                    update(STATE_REF, { status: 'CLEARED_PENDING', stage: currentStage });
+                    update(STATE_REF, { status: 'CLEARED_PENDING' });
                     setTimeout(() => {
                         currentStage++;
                         update(STATE_REF, { status: 'RESET', stage: currentStage, forceHost: myUid });
-                        startGame(false); 
                     }, 3000);
-                } else if (humanRunners === 0) {
-                    gameState = 'RESET_PENDING';
-                    update(STATE_REF, { status: 'HUMANS_DEAD', stage: 1 });
+                } else if (humanRunners === 0 && bots.every(b => !b.isAlive || b.hasFinished)) {
+                    update(STATE_REF, { status: 'HUMANS_DEAD' });
                 }
             }
         }
@@ -358,75 +285,44 @@
         function triggerGlobalReset(reason) {
             gameState = 'ENDED'; UI.overlay.style.display = 'flex';
             if (reason === 'CLEARED') {
-                UI.title.innerHTML = "라운드 종료!"; UI.title.className = "text-5xl font-black text-yellow-400 mb-2 text-center";
-                UI.desc.innerHTML = `누군가 결승선에 도착했습니다!<br>생존자 모두 다음 라운드로 진출합니다.<br><span class="text-xs">잠시 후 자동 재시작됩니다...</span>`;
+                UI.title.innerHTML = "라운드 종료!"; UI.title.className = "text-5xl font-black text-yellow-400 mb-2";
+                UI.desc.innerHTML = `누군가 결승선에 도착했습니다!<br>생존자 모두 다음 라운드로 진출합니다.`;
                 UI.btnStart.classList.add('hidden');
-            } else if (reason === 'ALL_DEAD_MANUAL') {
-                UI.title.innerHTML = "인간 전멸!"; UI.title.className = "text-6xl font-black text-red-500 mb-2 text-center";
-                UI.desc.innerHTML = `모든 플레이어가 탈락했습니다.<br><b>[다시 시작]</b>을 눌러 재도전하세요!`;
+            } else {
+                UI.title.innerHTML = "인간 전멸!"; UI.title.className = "text-6xl font-black text-red-500 mb-2";
+                UI.desc.innerHTML = `모든 플레이어가 탈락했습니다.`;
                 UI.btnStart.innerText = "다시 시작";
                 UI.btnStart.classList.remove('hidden');
-                UI.btnStart.onclick = claimHostAndRestart; 
             }
         }
 
-        function claimHostAndRestart() {
-            UI.btnStart.classList.add('hidden');
-            UI.desc.innerHTML = "게임을 초기화합니다...";
-            update(STATE_REF, { status: 'RESET', stage: 1, forceHost: myUid });
-        }
-
         UI.btnStart.onclick = () => {
-            update(STATE_REF, { status: 'PLAYING', stage: currentStage });
+            update(STATE_REF, { status: 'PLAYING', stage: currentStage, taggerData: null });
             startGame(false);
         };
 
         function startGame(isAutoStart = false) {
             gameState = 'PLAYING'; UI.overlay.style.display = 'none';
-            roundStartTime = Date.now(); 
-            
-            myPlayer.totalMeters += (myPlayer.currentMeters || 0);
-            myPlayer.currentMeters = 0;
-            myPlayer.displayScore = myPlayer.totalMeters;
-
             targetMeters = currentStage * 20; WORLD_START_Y = targetMeters * 20;
-            myPlayer.y = WORLD_START_Y; myPlayer.isAlive = true; myPlayer.hasFinished = false; myPlayer.deathReason = '';
-            lastMoveTime = Date.now(); cameraY = WORLD_START_Y - 500;
+            myPlayer.y = WORLD_START_Y; myPlayer.isAlive = true; myPlayer.hasFinished = false; 
+            lastMoveTime = getSyncedNow(); cameraY = WORLD_START_Y - 500;
             guardAnims = []; 
-            UI.distText.innerText = 0;
-            
             if (isHost) {
                 if (bots.length === 0) initBots();
-                bots.forEach(b => {
-                    b.totalMeters = (b.totalMeters || 0) + (b.currentMeters || 0);
-                    b.currentMeters = 0; b.displayScore = b.totalMeters;
-                    b.y = WORLD_START_Y; b.displayY = WORLD_START_Y;
-                    b.isAlive = true; b.hasFinished = false; b.lastMoveTime = Date.now(); 
-                    const speedMod = Math.max(0, (currentStage - 1) * 16);
-                    const reactMod = Math.max(0, (currentStage - 1) * 12);
-                    if(b.id === 'bot1') { b.stepSize=12; b.stepInterval=Math.max(45, 100-speedMod); b.reactionTime=Math.max(35, 120-reactMod); }
-                    if(b.id === 'bot2') { b.stepSize=11; b.stepInterval=Math.max(65, 130-speedMod); b.reactionTime=Math.max(25, 80-reactMod); }
-                    if(b.id === 'bot3') { b.stepSize=10; b.stepInterval=Math.max(85, 160-speedMod); b.reactionTime=Math.max(15, 50-reactMod); }
-                });
-                
-                setNextTaggerPattern(Date.now() + 1000);
+                bots.forEach(b => { b.y = WORLD_START_Y; b.displayY = b.y; b.isAlive = true; b.hasFinished = false; });
+                setNextTaggerPattern();
             }
-            syncLocalPlayer();
         }
 
         function movePlayer(foot) {
             if (gameState !== 'PLAYING' || !myPlayer.isAlive || myPlayer.hasFinished) return;
-            lastMoveTime = Date.now(); 
-
             if (tagger.isLookingFront) { die('moved'); return; }
 
             if (myPlayer.lastFoot !== foot) {
                 myPlayer.y -= myPlayer.stepSize; myPlayer.lastFoot = foot;
-                
-                myPlayer.currentMeters = Math.max(0, Math.floor((WORLD_START_Y - myPlayer.y) / 20));
-                myPlayer.displayScore = myPlayer.totalMeters + myPlayer.currentMeters;
-                UI.distText.innerText = myPlayer.currentMeters;
-
+                lastMoveTime = getSyncedNow(); 
+                myPlayer.displayScore = Math.max(0, Math.floor((WORLD_START_Y - myPlayer.y) / 20));
+                UI.distText.innerText = myPlayer.displayScore;
                 if (myPlayer.y <= WORLD_FINISH_Y) { myPlayer.hasFinished = true; myPlayer.y = WORLD_FINISH_Y - 30; }
                 syncLocalPlayer();
             }
@@ -434,15 +330,19 @@
 
         function die(reason) {
             myPlayer.isAlive = false; myPlayer.deathReason = reason;
-            myPlayer.currentMeters = Math.max(0, Math.floor((WORLD_START_Y - myPlayer.y) / 20));
-            myPlayer.displayScore = myPlayer.totalMeters + myPlayer.currentMeters;
-
             if (reason === 'camp') { 
                 guardAnims.push({ active: true, x: canvas.width + 100, y: myPlayer.y, targetX: myPlayer.x, alpha: 1 }); 
                 myPlayer.x += 40; 
             }
             syncLocalPlayer();
         }
+
+        // 화살표 키 조작 복구
+        window.addEventListener('keydown', (e) => {
+            if (gameState !== 'PLAYING' || !myPlayer.isAlive) return;
+            if (e.key === 'ArrowLeft') { movePlayer('left'); btnLeft.classList.add('active'); setTimeout(()=> btnLeft.classList.remove('active'), 100); }
+            if (e.key === 'ArrowRight') { movePlayer('right'); btnRight.classList.add('active'); setTimeout(()=> btnRight.classList.remove('active'), 100); }
+        });
 
         const btnLeft = document.getElementById('btnLeft');
         const btnRight = document.getElementById('btnRight');
@@ -451,35 +351,27 @@
             el.addEventListener('touchstart', handler, {passive: false}); el.addEventListener('mousedown', handler);
         };
         addInput(btnLeft, 'left'); addInput(btnRight, 'right');
-        
-        window.addEventListener('keydown', (e) => {
-            if (gameState !== 'PLAYING' || !myPlayer.isAlive) return;
-            if (e.key === 'ArrowLeft') { movePlayer('left'); btnLeft.classList.add('active'); setTimeout(()=> btnLeft.classList.remove('active'), 100); }
-            if (e.key === 'ArrowRight') { movePlayer('right'); btnRight.classList.add('active'); setTimeout(()=> btnRight.classList.remove('active'), 100); }
-        });
 
         function updateLogic() {
-            const now = Date.now();
+            const now = getSyncedNow();
 
             if (gameState === 'PLAYING' && myPlayer.isAlive && !myPlayer.hasFinished) {
                 if (now - lastMoveTime > 5000 && tagger.isLookingFront) die('camp'); 
             }
 
+            // 술래 상태 동기화 로직
             if (gameState === 'PLAYING' && globalTaggerData) {
                 let elapsed = now - globalTaggerData.startTime;
 
                 if (elapsed < 0) {
-                    tagger.state = 'WAITING';
                     tagger.isLookingFront = false;
                     tagger.speechBubble = "";
                 } else {
-                    let pattern = BASE_PATTERNS[globalTaggerData.patternId];
-                    if(!pattern) pattern = BASE_PATTERNS[0];
+                    let pattern = BASE_PATTERNS[globalTaggerData.patternId] || BASE_PATTERNS[0];
                     let accTime = 0;
                     let bubble = "";
                     let isLooking = false;
                     let isSpeaking = false;
-                    let currentIdx = 0;
 
                     for (let i = 0; i < pattern.length; i++) {
                         let dur = pattern[i].d * globalTaggerData.speed;
@@ -487,78 +379,43 @@
                         if (elapsed < accTime) {
                             bubble = pattern.slice(0, i + 1).map(p => p.t).join('');
                             isSpeaking = true;
-                            currentIdx = i;
                             break;
                         }
                     }
 
                     if (!isSpeaking) {
-                        currentIdx = pattern.length; 
                         if (elapsed < accTime + globalTaggerData.lookDuration) {
                             isLooking = true;
                         } else {
                             if (isHost && !tagger.isPickingNext) {
                                 tagger.isPickingNext = true;
                                 setTimeout(() => {
-                                    setNextTaggerPattern(Date.now() + 400);
+                                    setNextTaggerPattern();
                                     tagger.isPickingNext = false;
-                                }, 50);
-                            }
-                            if (elapsed > accTime + globalTaggerData.lookDuration + 1500 && isHost) {
-                                setNextTaggerPattern(Date.now());
+                                }, 500);
                             }
                         }
                     }
-
                     tagger.speechBubble = bubble;
                     tagger.isLookingFront = isLooking;
-                    tagger.phraseIndex = currentIdx;
-                    tagger.currentPattern = pattern;
                 }
             }
 
-            if (isHost) {
-                Object.keys(remotePlayers).forEach(uid => {
-                    const rp = remotePlayers[uid];
-                    if (now - (rp.localLastUpdate || 0) > 8000) {
-                        remove(ref(db, `${ROOM_PATH}/players/${uid}`)).catch(e=>console.error("Cleanup error:", e));
-                    }
-                    else if (gameState === 'PLAYING' && rp.isAlive && !rp.hasFinished) {
-                        if (tagger.isLookingFront && (now - rp.lastMoveTime > 5000)) {
-                            update(ref(db, `${ROOM_PATH}/players/${uid}`), { isAlive: false, deathReason: 'camp' });
+            if (isHost && gameState === 'PLAYING') {
+                bots.forEach(bot => {
+                    if (!bot.isAlive || bot.hasFinished) return;
+                    if (!tagger.isLookingFront) {
+                        if (now > (bot.nextStepTime || 0)) {
+                            bot.y -= bot.stepSize; bot.lastFoot = bot.lastFoot === 'left' ? 'right' : 'left';
+                            bot.displayScore = Math.max(0, Math.floor((WORLD_START_Y - bot.y) / 20));
+                            bot.nextStepTime = now + bot.stepInterval + (Math.random() * 20);
+                            bot.lastMoveTime = now;
+                            if (bot.y <= WORLD_FINISH_Y) bot.hasFinished = true;
                         }
+                    } else if (now - bot.lastMoveTime < 150) {
+                        bot.isAlive = false;
                     }
                 });
-
-                if (gameState === 'PLAYING') {
-                    bots.forEach(bot => {
-                        if (!bot.isAlive || bot.hasFinished) return;
-                        let patternLen = tagger.currentPattern ? Math.max(1, tagger.currentPattern.length) : 1;
-                        let progress = tagger.phraseIndex / patternLen;
-                        let startCautionProgress = patternLen < 8 ? 0.3 : 0.45;
-                        let currentDelay = 0; if (tagger.phraseIndex > 0 && tagger.currentPattern && tagger.currentPattern[tagger.phraseIndex - 1]) {
-                            currentDelay = tagger.currentPattern[tagger.phraseIndex - 1].d;
-                        }
-
-                        if (!tagger.isLookingFront) {
-                            if (now > bot.nextStepTime) {
-                                let shouldStop = false;
-                                if (tagger.speechBubble !== "" && progress > startCautionProgress) { if (Math.random() < bot.caution) shouldStop = true; }
-                                if (shouldStop && currentDelay > 800) { if (Math.random() > bot.caution + 0.1) shouldStop = false; }
-
-                                if (shouldStop) { bot.nextStepTime = now + 100; } 
-                                else {
-                                    bot.y -= bot.stepSize; bot.lastFoot = bot.lastFoot === 'left' ? 'right' : 'left';
-                                    bot.currentMeters = Math.max(0, Math.floor((WORLD_START_Y - bot.y) / 20));
-                                    bot.displayScore = bot.totalMeters + bot.currentMeters;
-
-                                    bot.nextStepTime = now + bot.stepInterval + (Math.random() * 40 - 20); bot.lastMoveTime = now;
-                                    if (bot.y <= WORLD_FINISH_Y) bot.hasFinished = true;
-                                }
-                            }
-                        } else { if (now - bot.lastMoveTime < 100) bot.isAlive = false; }
-                    });
-                }
             }
 
             let slotIndex = 1;
@@ -569,6 +426,7 @@
             keys.forEach(k => { remotePlayers[k].x = slotWidth * slotIndex++; });
         }
 
+        // --- 원본 고퀄리티 드로잉 로직 ---
         function drawTagger(t) {
             ctx.fillStyle = '#ec4899'; ctx.beginPath(); ctx.arc(0, 20, 20, Math.PI, 0); ctx.fill(); 
             ctx.beginPath(); ctx.arc(0, 0, t.radius, 0, Math.PI * 2);
@@ -576,94 +434,71 @@
                 ctx.fillStyle = '#fcd34d'; ctx.fill(); 
                 ctx.fillStyle = 'black'; ctx.fillRect(-12, -8, 6, 6); ctx.fillRect(6, -8, 6, 6); 
                 ctx.fillStyle = 'red'; ctx.beginPath(); ctx.arc(0, 10, 6, 0, Math.PI * 2); ctx.fill(); 
-                ctx.fillStyle = 'rgba(239, 68, 68, 0.3)'; ctx.beginPath(); ctx.moveTo(0, t.radius); ctx.lineTo(-1000, 2000); ctx.lineTo(1000, 2000); ctx.fill();
+                ctx.fillStyle = 'rgba(239, 68, 68, 0.2)'; ctx.beginPath(); ctx.moveTo(0, t.radius); ctx.lineTo(-1000, 2000); ctx.lineTo(1000, 2000); ctx.fill();
             } else { ctx.fillStyle = '#111827'; ctx.fill(); }
         }
 
-        function drawCharacter(char, maxScore) {
+        function drawCharacter(char, isMe) {
             ctx.save();
             if (char.displayY === undefined) char.displayY = char.y;
-            char.displayY += (char.y - char.displayY) * 0.3;
-            
+            char.displayY += (char.y - char.displayY) * 0.2;
             ctx.translate(char.x, char.displayY);
             if (!char.isAlive) ctx.globalAlpha = 0.4;
+            
             ctx.fillStyle = char.color; ctx.fillRect(-15, 0, 30, 20);
             ctx.beginPath(); ctx.arc(0, -10, char.radius, 0, Math.PI * 2); ctx.fill();
-
             ctx.fillStyle = '#111';
             if (char.lastFoot === 'left') { ctx.fillRect(-15, 20, 12, 12); ctx.fillRect(3, 10, 12, 12); } 
             else { ctx.fillRect(-15, 10, 12, 12); ctx.fillRect(3, 20, 12, 12); }
-
             if (!char.isAlive) {
-                ctx.strokeStyle = 'red'; ctx.lineWidth = 6;
-                ctx.beginPath(); ctx.moveTo(-20, -30); ctx.lineTo(20, 10); ctx.stroke();
-                ctx.beginPath(); ctx.moveTo(20, -30); ctx.lineTo(-20, 10); ctx.stroke();
+                ctx.strokeStyle = 'red'; ctx.lineWidth = 4;
+                ctx.beginPath(); ctx.moveTo(-15, -20); ctx.lineTo(15, 10); ctx.stroke();
+                ctx.beginPath(); ctx.moveTo(15, -20); ctx.lineTo(-15, 10); ctx.stroke();
             }
-            
             ctx.fillStyle = 'white'; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'center';
-            let textY = -35;
-            
-            ctx.fillText(`${char.displayScore || 0}m`, 0, textY);
-            textY -= 15;
-            ctx.fillText(char.name, 0, textY);
-            textY -= 15;
-
-            if (char.displayScore === maxScore && maxScore > 0) {
-                ctx.font = '16px sans-serif';
-                ctx.fillText('👑', 0, textY);
-                textY -= 18;
-            }
-
-            if (char === myPlayer) {
-                ctx.fillStyle = '#fcd34d'; 
-                ctx.font = 'bold 14px sans-serif';
-                ctx.fillText('나👇', 0, textY);
-            }
-
+            ctx.fillText(`${char.displayScore}m`, 0, -35);
+            ctx.fillText(char.name, 0, -50);
+            if (isMe) { ctx.fillStyle = '#fcd34d'; ctx.fillText('나👇', 0, -65); }
             ctx.restore();
         }
 
         function draw() {
-            if (myPlayer.isAlive && !myPlayer.hasFinished) cameraY += (myPlayer.y - canvas.height * 0.7 - cameraY) * 0.1;
-            if (cameraY < -150) cameraY = -150;
-
-            ctx.clearRect(0, 0, canvas.width, canvas.height); ctx.save(); ctx.translate(0, -cameraY);
+            if (myPlayer.isAlive) cameraY += (myPlayer.y - canvas.height * 0.7 - cameraY) * 0.1;
+            ctx.clearRect(0, 0, canvas.width, canvas.height); 
+            ctx.save(); ctx.translate(0, -cameraY);
 
             ctx.strokeStyle = 'rgba(0,0,0,0.1)'; ctx.lineWidth = 2;
             for (let i = 0; i <= WORLD_START_Y; i += 100) { ctx.beginPath(); ctx.moveTo(0, i); ctx.lineTo(canvas.width, i); ctx.stroke(); }
             ctx.fillStyle = '#fca5a5'; ctx.fillRect(0, WORLD_FINISH_Y, canvas.width, 20);
-            ctx.fillStyle = 'white'; ctx.fillRect(0, WORLD_START_Y + 20, canvas.width, 10);
 
             ctx.save(); ctx.translate(tagger.x, tagger.y); drawTagger(tagger); ctx.restore();
 
-            let allChars = [...bots, ...Object.values(remotePlayers), myPlayer].sort((a, b) => a.y - b.y);
-            
-            let maxScore = -1;
-            allChars.forEach(c => { if ((c.displayScore || 0) > maxScore) maxScore = (c.displayScore || 0); });
-
-            allChars.forEach(c => drawCharacter(c, maxScore));
+            bots.forEach(b => drawCharacter(b, false));
+            Object.values(remotePlayers).forEach(p => drawCharacter(p, false));
+            drawCharacter(myPlayer, true);
 
             guardAnims.forEach(anim => {
-                if (anim.active) {
-                    anim.x += (anim.targetX - anim.x) * 0.3;
-                    ctx.save(); ctx.translate(anim.x, anim.y);
-                    ctx.fillStyle = '#ec4899'; ctx.fillRect(-20, -20, 40, 40);
-                    ctx.fillStyle = 'white'; ctx.font = 'bold 20px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline='middle'; ctx.fillText('■', 0, 0);
-                    ctx.fillStyle = 'red'; ctx.font = 'bold 24px sans-serif'; ctx.fillText('캠핑 금지!', 0, -40); ctx.restore();
-                    if (Math.abs(anim.x - anim.targetX) < 5) { anim.alpha -= 0.05; if (anim.alpha <= 0) anim.active = false; }
-                }
+                anim.x += (anim.targetX - anim.x) * 0.2;
+                ctx.save(); ctx.translate(anim.x, anim.y);
+                ctx.fillStyle = '#ec4899'; ctx.fillRect(-20, -20, 40, 40);
+                ctx.fillStyle = 'red'; ctx.font = 'bold 20px sans-serif'; ctx.textAlign='center'; ctx.fillText('캠핑 금지!', 0, -30); ctx.restore();
             });
-            guardAnims = guardAnims.filter(a => a.active); 
-
             ctx.restore();
 
+            // 말풍선 배경 복구
             if (!tagger.isLookingFront && tagger.speechBubble) {
                 ctx.save();
                 let fontSize = Math.min(36, (canvas.width * 0.8) / (tagger.speechBubble.length || 1));
-                ctx.font = `900 ${fontSize}px sans-serif`; const textWidth = ctx.measureText(tagger.speechBubble).width;
+                ctx.font = `900 ${fontSize}px sans-serif`; 
+                const textWidth = ctx.measureText(tagger.speechBubble).width;
                 ctx.fillStyle = 'white'; ctx.strokeStyle = '#ec4899'; ctx.lineWidth = 4;
-                ctx.beginPath(); ctx.roundRect(canvas.width/2 - textWidth/2 - 20, 80, textWidth + 40, fontSize * 1.5, 20); ctx.fill(); ctx.stroke();
-                ctx.fillStyle = 'black'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(tagger.speechBubble, canvas.width/2, 80 + fontSize*0.75); ctx.restore();
+                ctx.beginPath(); 
+                if(ctx.roundRect) ctx.roundRect(canvas.width/2 - textWidth/2 - 20, 80, textWidth + 40, fontSize * 1.5, 20);
+                else ctx.rect(canvas.width/2 - textWidth/2 - 20, 80, textWidth + 40, fontSize * 1.5);
+                ctx.fill(); ctx.stroke();
+                ctx.fillStyle = 'black'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; 
+                ctx.fillText(tagger.speechBubble, canvas.width/2, 80 + fontSize*0.75); 
+                ctx.restore();
             } else if (tagger.isLookingFront) {
                 ctx.save(); ctx.fillStyle = '#ef4444'; ctx.strokeStyle = 'white'; ctx.lineWidth = 6;
                 ctx.font = '900 48px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
