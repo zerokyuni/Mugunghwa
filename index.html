@@ -59,11 +59,13 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, collection, doc, setDoc, onSnapshot, updateDoc, deleteDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getDatabase, ref, update, onValue, onDisconnect, remove, set } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-database.js";
 
+        // ❗ 요청하신 asia-southeast1 RTDB URL로 교체되었습니다 ❗
         const firebaseConfig = {
             apiKey: "AIzaSyDQ6QT1gRdh0yTm8_yT6j__Bb-VDHwx4xE",
             authDomain: "mugunghwa-game-938ed.firebaseapp.com",
+            databaseURL: "https://mugunghwa-game-938ed-default-rtdb.asia-southeast1.firebasedatabase.app/",
             projectId: "mugunghwa-game-938ed",
             storageBucket: "mugunghwa-game-938ed.firebasestorage.app",
             messagingSenderId: "500124015152",
@@ -73,7 +75,7 @@
         
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
-        const db = getFirestore(app);
+        const db = getDatabase(app); 
         const safeAppId = firebaseConfig.appId.replace(/[^a-zA-Z0-9]/g, '_'); 
 
         const UI = {
@@ -95,7 +97,6 @@
         let cameraY = WORLD_START_Y - 500;
         
         let roundStartTime = 0; 
-        
         let globalTaggerData = null; 
 
         let lastMoveTime = Date.now();
@@ -141,8 +142,10 @@
         });
         window.dispatchEvent(new Event('resize'));
 
-        function getPlayersRef() { return collection(db, `artifacts/${safeAppId}/public/data/squid_players`); }
-        function getStateRef() { return doc(db, `artifacts/${safeAppId}/public/data/squid_state`, 'globalState'); }
+        // RTDB 경로 설정
+        const ROOM_PATH = `rooms/${safeAppId}/squid`;
+        const PLAYERS_REF = ref(db, `${ROOM_PATH}/players`);
+        const STATE_REF = ref(db, `${ROOM_PATH}/globalState`);
 
         UI.desc.innerText = "1단계: Firebase 인증 진행 중...";
         signInAnonymously(auth).catch((error) => {
@@ -155,7 +158,10 @@
                 myUid = user.uid;
                 myPlayer.name = '유저 ' + myUid.substring(0, 4);
                 myPlayer.color = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'][Math.floor(Math.random()*5)];
-                UI.desc.innerText = "2단계: 데이터베이스 접속 중...";
+                
+                onDisconnect(ref(db, `${ROOM_PATH}/players/${myUid}`)).remove();
+                
+                UI.desc.innerText = "2단계: RTDB 접속 중...";
                 setupMultiplayer();
             }
         });
@@ -185,60 +191,52 @@
         }
 
         function setupMultiplayer() {
-            const playersRef = getPlayersRef();
-            const stateRef = getStateRef();
+            onValue(STATE_REF, (snapshot) => {
+                const data = snapshot.val();
+                if (!data) return;
+                
+                if (data.taggerData) globalTaggerData = data.taggerData;
+                
+                if (data.bots && !isHost) {
+                    data.bots.forEach(newBot => {
+                        let existingBot = bots.find(b => b.id === newBot.id);
+                        if (existingBot) newBot.displayY = existingBot.displayY;
+                        else newBot.displayY = newBot.y;
+                    });
+                    bots = data.bots;
+                } else if (data.bots && isHost && bots.length === 0) bots = data.bots;
 
-            onSnapshot(stateRef, (docSnap) => {
-                if (docSnap.exists()) {
-                    const data = docSnap.data();
-                    
-                    if (data.taggerData) {
-                        globalTaggerData = data.taggerData;
-                    }
-                    
-                    if (data.bots && !isHost) {
-                        data.bots.forEach(newBot => {
-                            let existingBot = bots.find(b => b.id === newBot.id);
-                            if (existingBot) newBot.displayY = existingBot.displayY;
-                            else newBot.displayY = newBot.y;
-                        });
-                        bots = data.bots;
-                    } else if (data.bots && isHost && bots.length === 0) bots = data.bots;
+                currentStage = data.stage || 1;
+                targetMeters = currentStage * 20;
+                WORLD_START_Y = targetMeters * 20;
+                UI.stageText.innerText = currentStage;
+                
+                if (data.forceHost) forcedHostUid = data.forceHost;
 
-                    currentStage = data.stage || 1;
-                    targetMeters = currentStage * 20;
-                    WORLD_START_Y = targetMeters * 20;
-                    UI.stageText.innerText = currentStage;
-                    
-                    if (data.forceHost) forcedHostUid = data.forceHost;
-
-                    if (data.status === 'PLAYING' && gameState !== 'PLAYING') {
-                        startGame(true); 
-                    } else if (data.status === 'CLEARED_PENDING' && gameState !== 'ENDED') {
-                        triggerGlobalReset('CLEARED');
-                    } else if (data.status === 'HUMANS_DEAD' && gameState !== 'ENDED') {
-                        triggerGlobalReset('ALL_DEAD_MANUAL');
-                    } else if (data.status === 'RESET' && gameState !== 'PLAYING') {
-                        startGame(true); 
-                    }
+                if (data.status === 'PLAYING' && gameState !== 'PLAYING') {
+                    startGame(true); 
+                } else if (data.status === 'CLEARED_PENDING' && gameState !== 'ENDED') {
+                    triggerGlobalReset('CLEARED');
+                } else if (data.status === 'HUMANS_DEAD' && gameState !== 'ENDED') {
+                    triggerGlobalReset('ALL_DEAD_MANUAL');
+                } else if (data.status === 'RESET' && gameState !== 'PLAYING') {
+                    startGame(true); 
                 }
             }, (error) => {
                 UI.title.innerHTML = "<span class='text-red-500'>DB 에러</span>";
                 UI.desc.innerHTML = `<b class='text-red-300'>데이터베이스 권한이 없습니다.</b><br><span class="text-sm">${error.message}</span>`;
             });
 
-            onSnapshot(playersRef, (snapshot) => {
+            onValue(PLAYERS_REF, (snapshot) => {
                 const now = Date.now();
                 let oldestUid = myUid;
                 let oldestTime = myPlayer.joinedAt;
                 let activeCount = 0;
-                const currentUids = [];
+                const playersData = snapshot.val() || {};
+                const currentUids = Object.keys(playersData);
 
-                snapshot.forEach(docSnap => {
-                    const data = docSnap.data();
-                    const uid = docSnap.id;
-                    currentUids.push(uid);
-                    
+                currentUids.forEach(uid => {
+                    const data = playersData[uid];
                     if (uid === myUid) {
                         if (myPlayer.isAlive && data.isAlive === false) {
                             myPlayer.isAlive = false;
@@ -277,9 +275,9 @@
                 }
             }, (error) => console.error(error));
 
-            setDoc(doc(playersRef, myUid), { ...myPlayer, joinedAt: myPlayer.joinedAt, lastActive: Date.now() }).catch(e => console.error(e));
-            setInterval(syncLocalPlayer, 200); 
-            setInterval(syncHostState, 300); 
+            syncLocalPlayer(); 
+            setInterval(syncLocalPlayer, 150); 
+            setInterval(syncHostState, 200); 
             requestAnimationFrame(gameLoop);
         }
 
@@ -296,12 +294,12 @@
 
         function syncLocalPlayer() {
             if (!myUid || gameState !== 'PLAYING') return;
-            setDoc(doc(getPlayersRef(), myUid), { 
+            update(ref(db, `${ROOM_PATH}/players/${myUid}`), { 
                 y: myPlayer.y || 0, isAlive: myPlayer.isAlive === true, hasFinished: myPlayer.hasFinished === true, 
                 lastFoot: myPlayer.lastFoot || 'left', deathReason: myPlayer.deathReason || '', lastMoveTime: lastMoveTime || 0, 
                 lastActive: Date.now(), joinedAt: myPlayer.joinedAt, displayScore: myPlayer.displayScore || 0, 
                 color: myPlayer.color || '#3b82f6', name: myPlayer.name || '나'
-            }, { merge: true }).catch(e => console.error(e));
+            }).catch(e => console.error(e));
         }
 
         function setNextTaggerPattern(startTime) {
@@ -310,9 +308,9 @@
             let spd = Math.max(0.4, 1.0 - (currentStage - 1) * 0.08);
             let lookDur = Math.max(200, 700 - currentStage * 50) + Math.random() * 600;
 
-            setDoc(getStateRef(), {
+            update(STATE_REF, {
                 taggerData: { patternId: pid, speed: spd, startTime: startTime, lookDuration: lookDur }
-            }, { merge: true }).catch(e => console.error("Pattern Set Error:", e));
+            }).catch(e => console.error("Pattern Set Error:", e));
         }
 
         function syncHostState() {
@@ -328,7 +326,7 @@
                 displayScore: b.displayScore || 0, totalMeters: b.totalMeters || 0, currentMeters: b.currentMeters || 0
             }));
 
-            setDoc(getStateRef(), { stage: currentStage, status: gameState, bots: safeBots }, { merge: true }).catch(e => console.error(e));
+            update(STATE_REF, { stage: currentStage, status: gameState, bots: safeBots }).catch(e => console.error(e));
         }
 
         function checkRoundProgression() {
@@ -344,14 +342,15 @@
             if (gameState === 'PLAYING') {
                 if (humanClear > 0) {
                     gameState = 'RESET_PENDING';
-                    setDoc(getStateRef(), { status: 'CLEARED_PENDING', stage: currentStage }, { merge: true });
+                    update(STATE_REF, { status: 'CLEARED_PENDING', stage: currentStage });
                     setTimeout(() => {
                         currentStage++;
-                        setDoc(getStateRef(), { status: 'RESET', stage: currentStage }, { merge: true });
+                        update(STATE_REF, { status: 'RESET', stage: currentStage, forceHost: myUid });
+                        startGame(false); 
                     }, 3000);
                 } else if (humanRunners === 0) {
                     gameState = 'RESET_PENDING';
-                    setDoc(getStateRef(), { status: 'HUMANS_DEAD', stage: 1 }, { merge: true });
+                    update(STATE_REF, { status: 'HUMANS_DEAD', stage: 1 });
                 }
             }
         }
@@ -374,11 +373,11 @@
         function claimHostAndRestart() {
             UI.btnStart.classList.add('hidden');
             UI.desc.innerHTML = "게임을 초기화합니다...";
-            setDoc(getStateRef(), { status: 'RESET', stage: 1, forceHost: myUid }, { merge: true });
+            update(STATE_REF, { status: 'RESET', stage: 1, forceHost: myUid });
         }
 
         UI.btnStart.onclick = () => {
-            setDoc(getStateRef(), { status: 'PLAYING', stage: currentStage }, { merge: true });
+            update(STATE_REF, { status: 'PLAYING', stage: currentStage });
             startGame(false);
         };
 
@@ -522,11 +521,11 @@
                 Object.keys(remotePlayers).forEach(uid => {
                     const rp = remotePlayers[uid];
                     if (now - (rp.localLastUpdate || 0) > 8000) {
-                        deleteDoc(doc(getPlayersRef(), uid)).catch(e=>console.error("Cleanup error:", e));
+                        remove(ref(db, `${ROOM_PATH}/players/${uid}`)).catch(e=>console.error("Cleanup error:", e));
                     }
                     else if (gameState === 'PLAYING' && rp.isAlive && !rp.hasFinished) {
                         if (tagger.isLookingFront && (now - rp.lastMoveTime > 5000)) {
-                            setDoc(doc(getPlayersRef(), uid), { isAlive: false, deathReason: 'camp' }, { merge: true });
+                            update(ref(db, `${ROOM_PATH}/players/${uid}`), { isAlive: false, deathReason: 'camp' });
                         }
                     }
                 });
